@@ -1,0 +1,49 @@
+{
+  "_comment": "Image Censor – Filter Rules",
+  "_syntax": [
+    "Each entry is a case-insensitive substring match against the full image URL.",
+    "A leading and/or trailing '*' is supported but optional — all matches are already partial.",
+    "'global' rules apply on every website.",
+    "'domains' keys match the current PAGE hostname (not the image hostname).",
+    "Subdomains are matched automatically: 'reddit.com' also matches 'old.reddit.com'."
+  ],
+  "global": [
+    "logo",
+    "icon",
+    "favicon",
+    "avatar",
+    "spinner",
+    "loading",
+    "placeholder",
+    "blank.gif",
+    "pixel.gif",
+    "spacer",
+    "*.ico"
+  ],
+  "domains": {
+    "reddit.com": [
+      "upvote",
+      "downvote",
+      "award",
+      "snoo",
+      "share_fill"
+    ],
+    "twitter.com": [
+      "emoji",
+      "verified"
+    ],
+    "x.com": [
+      "emoji",
+      "verified"
+    ],
+    "youtube.com": [
+      "yts/img",
+      "play_promo"
+    ],
+    "wikipedia.org": [
+      "magnify-clip",
+      "lock",
+      "question_book"
+    ]
+  }
+}

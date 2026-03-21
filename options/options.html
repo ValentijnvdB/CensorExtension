@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Image Censor — Settings</title>
+  <link rel="stylesheet" href="options.css" />
+</head>
+<body>
+<div class="shell">
+
+  <header>
+    <p class="eyebrow">Extension Config</p>
+    <h1>Image Censor <span>/</span> Settings</h1>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="config">Config</button>
+    <button class="tab" data-tab="connection">Connection</button>
+    <button class="tab" data-tab="advanced">Advanced</button>
+  </nav>
+
+  <!-- ── Connection tab ── -->
+  <div class="tab-panel" id="panel-connection">
+    <div class="card">
+      <p class="card-label">Server</p>
+
+      <div class="connection-field">
+        <label for="baseUrl">Base URL</label>
+        <p class="field-desc">
+          The root address of your processing server. All endpoints are derived from this value.
+        </p>
+        <div class="input-row">
+          <input type="url" id="baseUrl" placeholder="https://localhost:8443" spellcheck="false" />
+          <button class="btn-test" id="btnTest">Test</button>
+        </div>
+        <div class="status-row">
+          <span class="dot" id="dot"></span>
+          <span class="status-text" id="statusText">not tested</span>
+        </div>
+
+        <!-- Certificate trust banner — shown only when a cert error is detected -->
+        <div class="cert-banner" id="certBanner">
+          <p>
+            <strong>Self-signed certificate detected.</strong><br />
+            Firefox blocked the connection because it doesn't trust this certificate yet.
+            You need to accept it once in a browser tab — after that, all requests from
+            the extension will work automatically.
+          </p>
+          <ol class="cert-steps">
+            <li data-n="1.">Click the button below to open your server in a new tab.</li>
+            <li data-n="2.">Firefox will show a "Warning: Potential Security Risk" page.</li>
+            <li data-n="3.">Click <strong>Advanced…</strong> then <strong>Accept the Risk and Continue</strong>.</li>
+            <li data-n="4.">Come back here and click <strong>Re-test connection</strong>.</li>
+          </ol>
+          <button class="btn-trust" id="btnTrust">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+              <polyline points="15 3 21 3 21 9"/>
+              <line x1="10" y1="14" x2="21" y2="3"/>
+            </svg>
+            Open server in new tab
+          </button>
+        </div>
+      </div>
+
+      <hr class="divider" />
+
+      <div class="connection-field">
+        <label for="process">Process endpoint</label>
+        <p class="field-desc">Path that receives the image POST request.</p>
+        <input type="text" id="process" placeholder="/censor_image_url" spellcheck="false" />
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Config tab ── -->
+  <div class="tab-panel active" id="panel-config">
+
+    <div class="card" style="margin-top:16px">
+      <p class="card-label">Config I/O</p>
+      <p class="field-desc" style="margin-bottom:16px">Export the current config or import a previously exported one.</p>
+      <div class="io-row">
+        <button class="btn-io btn-export" id="btnExport">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          Export
+        </button>
+        <button class="btn-io btn-import" id="btnImport">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10" transform="rotate(180 12 12)"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          Import
+        </button>
+      </div>
+      <input type="file" id="importFile" accept=".json" style="display:none" />
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <p class="card-label">General</p>
+      <div id="general-fields"></div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <p class="card-label">Defaults</p>
+      <p class="field-desc" style="margin-bottom:20px">
+        Global settings applied to all features unless overridden.
+      </p>
+      <div id="defaults-fields"></div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <p class="card-label">Features</p>
+      <div id="feature-list"></div>
+    </div>
+
+  </div>
+
+  <!-- ── Advanced tab ── -->
+  <div class="tab-panel" id="panel-advanced">
+    <div class="card">
+      <p class="card-label">Cache</p>
+      <p class="field-desc" style="margin-bottom:16px">
+        Clear the server-side detection cache.
+        Will need to rerun the models on all images.
+      </p>
+      <button class="btn-reset-cache" id="btnResetCache">Reset Cache</button>
+    </div>
+  </div>
+
+  <button class="btn-save" id="btnSave">Save Settings</button>
+
+  <footer>Changes take effect on the next page load.</footer>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<!-- connection and config can load in either order after shared -->
+<script src="shared.js"></script>
+<script src="connection.js"></script>
+<script src="../settings_reader.js"></script>
+<script src="config.js"></script>
+<script src="config_io.js"></script>
+
+</body>
+</html>
