@@ -70,6 +70,7 @@ class VideoCapture {
         console.log("[VideoCensor] frameCompleted, inFlight=", this._inFlightCount, "paused=", this._source.paused, "rafHandle=", this._rafHandle, "timerHandle=", this._timerHandle);
         // Resume whichever loop was stalled due to back-pressure
         if (this._capturing && this._rafHandle === null && this._timerHandle === null) {
+            console.log("[VideoCensor] ============================== RESUMING LOOP ======================");
             if (this._source.paused) {
                 this._enterPausedMode();
             } else {
@@ -100,7 +101,7 @@ class VideoCapture {
             return;
         }
 
-        if (this._inFlightCount >= (window.VIDEO_MAX_IN_FLIGHT || 10)) return;
+        if (this._inFlightCount > (VIDEO_MAX_IN_FLIGHT || 10)) return;
         if (this._rafHandle !== null) return;
 
         if ("requestVideoFrameCallback" in HTMLVideoElement.prototype) {
@@ -113,8 +114,17 @@ class VideoCapture {
     _rvfcLoop(now, metadata) {
         this._rafHandle = null;
         if (!this._capturing) return;
-        this._captureCurrentFrame();
-        if (this._inFlightCount < VIDEO_MAX_IN_FLIGHT) {
+
+        const targetInterval = 1 / VIDEO_FPS_TARGET;
+        const currentTime = this._source.currentTime;
+
+        // Only capture if the video has progressed by at least 1/FPS_TARGET seconds
+        if (this._lastVideoTime === -1 || (currentTime - this._lastVideoTime) >= targetInterval) {
+            this._lastVideoTime = currentTime;
+            this._captureCurrentFrame();
+        }
+
+        if (this._inFlightCount <= VIDEO_MAX_IN_FLIGHT) {
             this._scheduleRvfc();
         }
     }
@@ -127,7 +137,7 @@ class VideoCapture {
             this._lastVideoTime = vt;
             this._captureCurrentFrame();
         }
-        if (this._inFlightCount < VIDEO_MAX_IN_FLIGHT) {
+        if (this._inFlightCount <= VIDEO_MAX_IN_FLIGHT) {
             this._rafHandle = requestAnimationFrame(this._boundRafFallback);
         }
     }
@@ -142,12 +152,11 @@ class VideoCapture {
 
     _schedulePausedTick() {
         if (!this._capturing) return;
-        // Increase the "in-flight" limit slightly during buffering to saturate the pipe
-        if (this._inFlightCount >= (window.VIDEO_MAX_IN_FLIGHT || 10)) return;
+        if (this._inFlightCount > (VIDEO_MAX_IN_FLIGHT || 10)) return;
         if (this._timerHandle !== null) return;
 
         // Use a fixed high-frequency tick when buffering to refill quickly
-        const fps = 30;
+        const fps = 25;
         this._timerHandle = setTimeout(this._boundPausedTick, 1000 / fps);
     }
 
@@ -155,16 +164,12 @@ class VideoCapture {
         this._timerHandle = null;
         if (!this._capturing) return;
 
-        // Remove the check that switches back to PlayingMode immediately if !paused.
-        // Let the capture happen first, then the next schedule call will decide the mode.
         this._captureCurrentFrame();
 
-        if (this._inFlightCount < (window.VIDEO_MAX_IN_FLIGHT || 10)) {
-            if (this._source.paused) {
-                this._schedulePausedTick();
-            } else {
-                this._enterPlayingMode();
-            }
+        if (this._source.paused) {
+            this._schedulePausedTick();
+        } else {
+            this._enterPlayingMode();
         }
     }
 
@@ -172,28 +177,35 @@ class VideoCapture {
 
     _captureCurrentFrame() {
         const v = this._source;
-        if (v.readyState < 2 || v.videoWidth === 0) return;
+        if (!v.videoWidth) return;
 
-        if (this._canvas.width !== v.videoWidth || this._canvas.height !== v.videoHeight) {
-            this._canvas.width  = v.videoWidth;
-            this._canvas.height = v.videoHeight;
-        }
-
-        this._ctx.drawImage(v, 0, 0);
-
-        const frameNum = this._frameNum++;
+        // 1. Immediately increment in-flight count
+        // This allows the next RVFC tick to proceed while this frame is encoding
         this._inFlightCount++;
 
-        const format   = (typeof videoFrameFormat !== "undefined") ? videoFrameFormat : "jpeg";
-        const quality  = (typeof videoJpegQuality !== "undefined") ? videoJpegQuality : 0.85;
-        const mimeType = format === "png"  ? "image/png"
-                       : format === "webp" ? "image/webp"
-                       : "image/jpeg";
+        // 2. Use a "Pool" of canvases if needed, or draw immediately
+        // If you draw to the same canvas repeatedly while toBlob is running,
+        // you might get "smearing". It is safer to use a temporary canvas for the encoding.
+        const tempCanvas = document.createElement('canvas');
+        tempCanvas.width = v.videoWidth;
+        tempCanvas.height = v.videoHeight;
+        const tempCtx = tempCanvas.getContext('2d');
+        tempCtx.drawImage(v, 0, 0);
 
-        this._canvas.toBlob((blob) => {
-            if (!blob) { this._inFlightCount--; return; }
-            blob.arrayBuffer().then(bytes => this._onFrame(frameNum, bytes));
-        }, mimeType, mimeType === "image/png" ? undefined : quality);
+        const frameNum = this._frameNum++;
+
+        // 3. Fire and Forget the encoding
+        tempCanvas.toBlob((blob) => {
+            if (!blob) {
+                this._inFlightCount--;
+                return;
+            }
+            blob.arrayBuffer().then(bytes => {
+                // This frame is now TRULY in flight (on the wire)
+                this._onFrame(frameNum, bytes);
+                // Note: _inFlightCount is decremented in VideoRenderer.receiveFrame
+            });
+        }, `image/${videoFrameFormat}`, frameCompressionLevel);
     }
 
     _cancelRafHandle() {

@@ -32,6 +32,8 @@ function videoWsUnregister(videoId) {
     // If no more videos, let the connection idle (don't close — cheap to keep open)
 }
 
+prevBytes = null
+
 /**
  * Send a frame to the server.
  * @param {number} videoId
@@ -40,7 +42,8 @@ function videoWsUnregister(videoId) {
  * @param {ArrayBuffer} frameBytes  – raw image bytes (no header)
  */
 function videoWsSend(videoId, seekId, frameNum, frameBytes) {
-    console.log("Sending frame:", videoId, seekId, frameNum);
+    console.log("Sending frame:", videoId, seekId, frameNum, frameBytes === prevBytes);
+    prevBytes = frameBytes;
     const header = new ArrayBuffer(12);
     const view = new DataView(header);
     view.setUint32(0, videoId, false);

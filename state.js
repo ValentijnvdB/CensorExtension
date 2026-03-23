@@ -22,13 +22,13 @@ const SETTING_DEFAULTS = {
 // These are hard-coded defaults; future work could expose them in the options UI.
 
 /** Maximum number of frames sent to the WS server that have not yet been returned. */
-const VIDEO_MAX_IN_FLIGHT = 128;
+const VIDEO_MAX_IN_FLIGHT = 20;
 
 /** Image format for encoded frames: 'jpeg' | 'png' | 'webp' */
-let videoFrameFormat = 'jpeg';
+let videoFrameFormat = 'webp';
 
 /** JPEG/WebP quality (0–1). Only used when videoFrameFormat is 'jpeg' or 'webp'. */
-let videoJpegQuality = 0.85;
+let frameCompressionLevel = 0.5;
 
 /**
  * How many seconds of frames to buffer before starting playback.
@@ -36,6 +36,9 @@ let videoJpegQuality = 0.85;
  * frames are ready, then unpauses the output canvas and audio.
  */
 let videoPrebufferSeconds = 3;
+
+// Target frames per second to send to the backend to prevent buffer starvation.
+const VIDEO_FPS_TARGET = 15;
 
 // Populated once storage + filters are both ready.
 let ENDPOINTS = null;

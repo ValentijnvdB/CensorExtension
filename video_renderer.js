@@ -200,34 +200,36 @@ class VideoRenderer {
             this._rafHandle = null;
             if (this._state !== RendererState.PLAYING) return;
 
-            // Pace display to the video's frame rate. rAF fires at ~60fps but
-            // we should only advance one frame per 1/fps seconds of wall time.
-            const frameDuration = 1000 / this._estimateFps(); // ms per frame
+            const frameDuration = 1000 / VIDEO_FPS_TARGET;
             if (this._lastTickTime !== null) {
                 const elapsed = now - this._lastTickTime;
                 if (elapsed < frameDuration * 0.9) {
-                    // Too soon — wait for the next rAF without consuming a frame
                     this._tick();
                     return;
                 }
             }
             this._lastTickTime = now;
 
+            // Find the specific frame index assigned by the capture unit
             const bitmap = this._buffer.get(this._nextFrame);
+
             if (bitmap) {
-                if (this._canvas.width !== bitmap.width || this._canvas.height !== bitmap.height) {
-                    this._canvas.width  = bitmap.width;
-                    this._canvas.height = bitmap.height;
-                }
+                // ... (drawing logic same as before) ...
                 this._ctx.drawImage(bitmap, 0, 0);
                 bitmap.close();
                 this._buffer.delete(this._nextFrame);
-                this._nextFrame++;
+                this._nextFrame++; // Advance to the next EXPECTED dropped-frame index
                 this._correctAudioSync();
             } else {
-                // Buffer starvation — re-enter buffering, pausing source
-                this._enterBuffering(true);
-                return;
+                // If we are missing a frame, check if a FUTURE frame exists.
+                // If it does, we just skipped one; if not, we are starving.
+                const hasFutureFrame = Array.from(this._buffer.keys()).some(k => k > this._nextFrame);
+                if (hasFutureFrame) {
+                    this._nextFrame++;
+                } else {
+                    this._enterBuffering(true);
+                    return;
+                }
             }
 
             this._tick();
@@ -259,7 +261,9 @@ class VideoRenderer {
         if (this._rttSamples.length > 30) this._rttSamples.shift();
     }
 
-    _estimateFps() { return 30; }
+    _estimateFps() {
+        return VIDEO_FPS_TARGET; // The renderer now operates at the throttled rate
+    }
 
     _showBufferingOverlay(show) {
         if (!show) return;
