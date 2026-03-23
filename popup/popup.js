@@ -1,4 +1,4 @@
-const SETTING_DEFAULTS = { removeGifs: false, removeVideos: false, loadBehavior: 'blur', extensionEnabled: true };
+const SETTING_DEFAULTS = { removeGifs: false, removeVideos: false, censorVideos: false, loadBehavior: 'blur', extensionEnabled: true };
 
 const $ = id => document.getElementById(id);
 
@@ -9,13 +9,14 @@ $("version").textContent = `v${manifest.version}`;
 // ── Render saved state ────────────────────────────────────────────────────────
 browser.storage.sync.get(SETTING_DEFAULTS).then(settings => {
     applyToggleUI("extensionEnabled", settings.extensionEnabled);
-    applyToggleUI("removeGifs",   settings.removeGifs);
-    applyToggleUI("removeVideos", settings.removeVideos);
+    applyToggleUI("removeGifs",    settings.removeGifs);
+    applyToggleUI("removeVideos",  settings.removeVideos);
+    applyToggleUI("censorVideos",  settings.censorVideos);
     applySelectUI("loadBehavior",  settings.loadBehavior);
 });
 
 // ── Toggle interaction ────────────────────────────────────────────────────────
-for (const setting of ["extensionEnabled", "removeGifs", "removeVideos"]) {
+for (const setting of ["extensionEnabled", "removeGifs", "removeVideos", "censorVideos"]) {
     $(`toggle-${setting}`).addEventListener("click", async () => {
         const current  = await browser.storage.sync.get(SETTING_DEFAULTS);
         const newValue = !current[setting];

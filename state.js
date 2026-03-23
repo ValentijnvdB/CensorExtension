@@ -12,10 +12,30 @@ const DEFAULTS = {
 
 const SETTING_DEFAULTS = {
     extensionEnabled: true,
-    removeGifs:   false,
-    removeVideos: false,
+    removeGifs:    false,
+    removeVideos:  false,
+    censorVideos:  false,
     loadBehavior:  'blur',
 };
+
+// ── Video censoring config ────────────────────────────────────────────────────
+// These are hard-coded defaults; future work could expose them in the options UI.
+
+/** Maximum number of frames sent to the WS server that have not yet been returned. */
+const VIDEO_MAX_IN_FLIGHT = 128;
+
+/** Image format for encoded frames: 'jpeg' | 'png' | 'webp' */
+let videoFrameFormat = 'jpeg';
+
+/** JPEG/WebP quality (0–1). Only used when videoFrameFormat is 'jpeg' or 'webp'. */
+let videoJpegQuality = 0.85;
+
+/**
+ * How many seconds of frames to buffer before starting playback.
+ * The pipeline stays in BUFFERING state until this many seconds' worth of
+ * frames are ready, then unpauses the output canvas and audio.
+ */
+let videoPrebufferSeconds = 3;
 
 // Populated once storage + filters are both ready.
 let ENDPOINTS = null;

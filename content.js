@@ -21,8 +21,9 @@ Promise.all([
     };
 
     settings.extensionEnabled = stored.extensionEnabled;
-    settings.removeGifs   = stored.removeGifs;
-    settings.removeVideos = stored.removeVideos;
+    settings.removeGifs    = stored.removeGifs;
+    settings.removeVideos  = stored.removeVideos;
+    settings.censorVideos  = stored.censorVideos;
     settings.loadBehavior  = stored.loadBehavior;
 
     compileFilters(filters);
@@ -55,6 +56,11 @@ browser.runtime.onMessage.addListener((msg) => {
         applyVideoSetting();
     }
 
+    if (msg.setting === "censorVideos") {
+        settings.censorVideos = msg.value;
+        applyCensorVideoSetting();
+    }
+
     if (msg.setting === "loadBehavior") {
         settings.loadBehavior = msg.value;
     }
@@ -67,6 +73,7 @@ function processAllImages() {
     if (settings.extensionEnabled) {
         document.querySelectorAll("img").forEach(enqueueImage);
         document.querySelectorAll("video").forEach(replaceVideoIfNeeded);
+        document.querySelectorAll("video").forEach(censorVideoIfNeeded);
     }
 }
 
@@ -79,6 +86,7 @@ const observer = new MutationObserver((mutations) => {
                     enqueueImage(node);
                 } else if (node.tagName === "VIDEO") {
                     replaceVideoIfNeeded(node);
+                    censorVideoIfNeeded(node);
                 } else {
                     node.querySelectorAll?.("img").forEach(enqueueImage);
                     node.querySelectorAll?.("video").forEach(replaceVideoIfNeeded);
