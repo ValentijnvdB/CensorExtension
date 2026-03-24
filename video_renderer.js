@@ -2,15 +2,32 @@
  * video_renderer.js – Output canvas, frame buffer, and state machine
  *
  * State machine:
- *   IDLE → BUFFERING → PLAYING → BUFFERING (on seek / buffer starvation)
+ *   IDLE → BUFFERING → PLAYING → BUFFERING (on starvation or seek)
  *
- * The renderer never calls source.play() or source.pause(). Playback of the
- * source video is owned entirely by the user/player. We only observe events
- * and nudge source.currentTime for audio sync.
+ * BUFFERING:
+ *   - Source video is paused internally (internalPlayback = true).
+ *   - Canvas shows "Buffering…".
+ *   - VideoCapture runs in seek-step mode, advancing currentTime forward.
+ *   - On entry, _prebufferOrigin records the currentTime at which buffering
+ *     started so we can snap back once the buffer is full.
+ *   - Exits to PLAYING when buffer.size >= prebufferFrames.
  *
- * Prebuffering: capture starts when the user presses play. We collect frames
- * for videoPrebufferSeconds before starting canvas playback, so the canvas
- * always has frames ready ahead of the display position.
+ * PLAYING:
+ *   - Source plays freely — audio is the clock.
+ *   - rAF tick finds the frame with the largest captureTime <= source.currentTime
+ *     and draws it; all older frames are discarded.
+ *   - VideoCapture runs in rVFC mode.
+ *   - Transitions back to BUFFERING when the buffer is empty (starvation).
+ *
+ * User pause during PLAYING:
+ *   - Source is already paused by the user; canvas freezes.
+ *   - Capture keeps running in seek-step mode to fill the buffer.
+ *   - On resume: if buffer already full → PLAYING directly, else → BUFFERING.
+ *
+ * Audio sync:
+ *   The canvas follows source.currentTime — no nudging of currentTime needed.
+ *   The "largest captureTime <= currentTime" selection in _tick() provides
+ *   natural sync at zero cost.
  */
 
 const RendererState = Object.freeze({
@@ -19,8 +36,6 @@ const RendererState = Object.freeze({
     PLAYING:   "PLAYING",
 });
 
-const SYNC_THRESHOLD_S = 0.15;
-
 class VideoRenderer {
     constructor(sourceVideo, outputCanvas, onNeedFrames) {
         this._source       = sourceVideo;
@@ -28,27 +43,29 @@ class VideoRenderer {
         this._ctx          = outputCanvas.getContext("2d");
         this._onNeedFrames = onNeedFrames;
 
-        this._state     = RendererState.IDLE;
-        this._seekId    = 0;
+        this._state  = RendererState.IDLE;
+        this._seekId = 0;
 
-        this._buffer    = new Map(); // frameNum → ImageBitmap
-        this._nextFrame = 0;
+        // frameNum → { bitmap: ImageBitmap, captureTime: number }
+        this._buffer    = new Map();
+        this._nextFrame = 0; // lowest frameNum not yet displayed
 
-        this._rafHandle     = null;
-        this._lastTickTime  = null;
-        this._playStartTime = null;
-        this._playStartSrcT = null;
+        this._rafHandle = null;
 
-        this._rttSamples        = [];
-        this._frameDispatchTime = new Map();
-        this._prebufferFrames   = 0;
+        // captureTime recorded at dispatch, looked up when frame returns.
+        // frameNum → captureTime (number, seconds)
+        this._captureTimeMap = new Map();
 
-        // Set true whenever the renderer itself calls source.play/pause,
-        // so the pipeline ignores those non-user-initiated events.
+        this._prebufferFrames = 0;
+        // source.currentTime at the start of a BUFFERING phase — we snap back
+        // here when transitioning to PLAYING so audio starts at the right place.
+        this._prebufferOrigin = null;
+
+        // Set true whenever the renderer itself calls source.play/pause so the
+        // pipeline ignores those non-user-initiated events.
         this.internalPlayback = false;
 
-        // True if we paused the source video due to buffer starvation,
-        // so we know to resume it when frames are ready again.
+        // True if we paused the source due to buffering/starvation.
         this._sourcePausedByUs = false;
     }
 
@@ -57,38 +74,50 @@ class VideoRenderer {
     get seekId() { return this._seekId; }
     get state()  { return this._state; }
 
-    /** Called by VideoPipeline when the WS connects */
+    /** Returns true when the buffer has reached the prebuffer target. */
+    isBufferFull() {
+        return this._buffer.size >= this._prebufferFrames;
+    }
+
+    /** Called by VideoPipeline when the WS connects. */
     start() {
-        // Don't enter buffering yet — wait for the user to press play.
-        // The canvas will just be blank/black until then.
         this._state = RendererState.IDLE;
     }
 
-    /** Called by VideoPipeline when the WS drops */
+    /** Called by VideoPipeline when the WS drops. */
     onWsClose() {
         this._state = RendererState.IDLE;
         this._stopPlaybackLoop();
     }
 
-    recordFrameDispatch(frameNum) {
-        this._frameDispatchTime.set(frameNum, performance.now());
+    /**
+     * Record the captureTime for a frame at the moment it is dispatched to
+     * the backend, so it is available when the processed frame returns.
+     */
+    recordFrameDispatch(frameNum, captureTime) {
+        this._captureTimeMap.set(frameNum, captureTime);
     }
 
+    /**
+     * Called by VideoPipeline when a processed frame arrives from the server.
+     * onConsumed() must be called exactly once — it decrements the capture
+     * in-flight count.
+     */
     receiveFrame(seekId, frameNum, bytes, onConsumed) {
         if (seekId !== this._seekId) {
             onConsumed();
             return;
         }
 
-        const dispatched = this._frameDispatchTime.get(frameNum);
-        if (dispatched !== undefined) {
-            this._recordRtt(performance.now() - dispatched);
-            this._frameDispatchTime.delete(frameNum);
-        }
+        const captureTime = this._captureTimeMap.get(frameNum);
+        this._captureTimeMap.delete(frameNum);
 
         createImageBitmap(new Blob([bytes])).then(bitmap => {
             onConsumed();
-            this._buffer.set(frameNum, bitmap);
+            this._buffer.set(frameNum, {
+                bitmap,
+                captureTime: captureTime ?? 0,
+            });
             if (this._state === RendererState.BUFFERING) {
                 this._checkPrebuffer();
             }
@@ -98,64 +127,89 @@ class VideoRenderer {
         });
     }
 
+    /** Called by VideoPipeline on a user-initiated seek. */
     onSeeked() {
         this._seekId++;
         this._nextFrame = 0;
-        this._frameDispatchTime.clear();
-        this._rttSamples = [];
-        for (const [, bmp] of this._buffer) bmp.close();
+        this._captureTimeMap.clear();
+        for (const [, { bitmap }] of this._buffer) bitmap.close();
         this._buffer.clear();
         this._stopPlaybackLoop();
-        // Re-enter buffering — capture will restart via _onNeedFrames
-        this._enterBuffering(false);
+        this._enterBuffering();
     }
 
+    /** Called by VideoPipeline on a user-initiated pause. */
     onPaused() {
-        // User paused manually — clear our pause flag so we don't
-        // resume the video when frames arrive; that's the user's call.
+        // Clear our ownership flag — the user paused, not us.
+        // We must NOT resume the source when the buffer refills.
         this._sourcePausedByUs = false;
         this._stopPlaybackLoop();
+        // Keep state as-is; capture will keep stepping to fill the buffer.
+        // If we were PLAYING, stay logically in a "paused-playing" sub-state
+        // that onResumed() will recover from.
+    }
+
+    /** Called by VideoPipeline on a user-initiated play/resume. */
+    onResumed() {
+        if (this._state === RendererState.IDLE) {
+            this._enterBuffering();
+            return;
+        }
+        if (this._state === RendererState.BUFFERING) {
+            // Still buffering — the capture loop is already running; nothing to do.
+            return;
+        }
         if (this._state === RendererState.PLAYING) {
-            this._state = RendererState.BUFFERING;
-            this._showBufferingOverlay(true);
+            // Was playing, user paused then resumed.
+            if (this._buffer.size >= this._prebufferFrames) {
+                this._startPlaybackLoop();
+            } else {
+                this._enterBuffering();
+            }
         }
     }
 
-    onResumed() {
-        if (this._state === RendererState.IDLE || this._state === RendererState.BUFFERING) {
-            this._enterBuffering(false);
-        } else if (this._state === RendererState.PLAYING) {
-            this._startPlaybackLoop();
-        }
+    destroy() {
+        this._stopPlaybackLoop();
+        for (const [, { bitmap }] of this._buffer) bitmap.close();
+        this._buffer.clear();
     }
 
     // ── State machine ─────────────────────────────────────────────────────────
 
-    _enterBuffering(wasPlaying = false) {
+    _enterBuffering() {
         this._state = RendererState.BUFFERING;
         this._stopPlaybackLoop();
 
-        const fps  = this._estimateFps();
+        const fps  = VIDEO_FPS_TARGET;
         const secs = (typeof videoPrebufferSeconds !== "undefined") ? videoPrebufferSeconds : 3;
         this._prebufferFrames = Math.ceil(fps * secs);
 
-        this._showBufferingOverlay(true);
+        // Record where we are so we can snap back when PLAYING starts.
+        this._prebufferOrigin = this._source.currentTime;
 
-        if (wasPlaying && !this._source.paused) {
-            this.internalPlayback = true;
+        this._showBufferingOverlay();
+
+        // Pause the source if it isn't already — capture will seek-step forward
+        // from here to fill the buffer.
+        if (!this._source.paused) {
+            this.internalPlayback  = true;
             this._sourcePausedByUs = true;
+            // Clear internalPlayback once the pause event has actually fired,
+            // not just after one event-loop tick, to avoid a race where a
+            // bounce 'play' event slips through before the pause lands.
+            this._source.addEventListener("pause", () => {
+                this.internalPlayback = false;
+            }, { once: true });
             this._source.pause();
-            // We don't set internalPlayback to false until the event loop clears
-            // to ensure the pipeline doesn't catch the 'pause' event as a user action.
-            setTimeout(() => { this.internalPlayback = false; }, 0);
         }
 
-        // This triggers this._capture.start() via the callback in VideoPipeline
+        // Signal the pipeline to start capture (capture will see source.paused
+        // and enter stepping mode automatically).
         this._onNeedFrames();
     }
 
     _checkPrebuffer() {
-        console.log("[VideoCensor] checkPrebuffer: buffer=", this._buffer.size, "/", this._prebufferFrames);
         if (this._buffer.size >= this._prebufferFrames) {
             this._enterPlaying();
         }
@@ -163,19 +217,45 @@ class VideoRenderer {
 
     _enterPlaying() {
         this._state = RendererState.PLAYING;
+
+        // Mark internalPlayback now and keep it true across the entire
+        // pause → snap-back seek → play sequence. It is only cleared once
+        // source.play() resolves (or rejects), ensuring the pipeline ignores
+        // every event we generate in between.
+        this.internalPlayback = true;
+
+        if (this._prebufferOrigin !== null) {
+            const target = this._prebufferOrigin;
+            this._prebufferOrigin = null;
+
+            const onSnapped = () => {
+                // internalPlayback stays true — _finishEnterPlaying will
+                // clear it only after play() settles.
+                this._finishEnterPlaying();
+            };
+            this._source.addEventListener("seeked", onSnapped, { once: true });
+            this._source.currentTime = target;
+            return;
+        }
+
+        this._finishEnterPlaying();
+    }
+
+    _finishEnterPlaying() {
         this._clearOverlay();
 
-        this._lastTickTime  = null; // reset so first frame shows immediately
-        this._playStartTime = performance.now();
-        this._playStartSrcT = this._source.currentTime;
-
-        // Resume the source video if we paused it during buffering.
         if (this._sourcePausedByUs) {
             this._sourcePausedByUs = false;
-            this.internalPlayback = true;
             this._source.play()
                 .then(() => { this.internalPlayback = false; })
-                .catch(() => { this.internalPlayback = false; });
+                .catch((err) => {
+                    this.internalPlayback = false;
+                    console.warn("[VideoCensor] source.play() failed:", err);
+                });
+        } else {
+            // Source is already playing (e.g. user resumed before us) or we
+            // didn't pause it — nothing to do, clear the flag immediately.
+            this.internalPlayback = false;
         }
 
         this._startPlaybackLoop();
@@ -196,104 +276,98 @@ class VideoRenderer {
     }
 
     _tick() {
-        this._rafHandle = requestAnimationFrame((now) => {
+        this._rafHandle = requestAnimationFrame(() => {
             this._rafHandle = null;
             if (this._state !== RendererState.PLAYING) return;
 
-            const frameDuration = 1000 / VIDEO_FPS_TARGET;
-            if (this._lastTickTime !== null) {
-                const elapsed = now - this._lastTickTime;
-                if (elapsed < frameDuration * 0.9) {
-                    this._tick();
-                    return;
+            const now = this._source.currentTime;
+
+            // Find the best frame to display: among all frames whose captureTime
+            // is <= now (i.e. due to be shown), pick the one with the highest
+            // frameNum. frameNum is a strictly monotonic counter assigned at
+            // capture time, so it is always the correct ordering key.
+            // captureTime alone is not reliable because two frames captured in
+            // the same rVFC tick can share the same value, and Map iteration
+            // order (insertion order) does not equal capture order when the
+            // backend returns frames out of order.
+            let bestFrameNum    = null;
+            let bestCaptureTime = -Infinity;
+
+            for (const [frameNum, { captureTime }] of this._buffer) {
+                if (captureTime <= now) {
+                    if (bestFrameNum === null || frameNum > bestFrameNum) {
+                        bestFrameNum    = frameNum;
+                        bestCaptureTime = captureTime;
+                    }
                 }
             }
-            this._lastTickTime = now;
 
-            // Find the specific frame index assigned by the capture unit
-            const bitmap = this._buffer.get(this._nextFrame);
+            if (bestFrameNum !== null) {
+                // Discard all frames with a lower frameNum — they are older and
+                // will never be shown.
+                for (const [frameNum, { bitmap }] of this._buffer) {
+                    if (frameNum < bestFrameNum) {
+                        bitmap.close();
+                        this._buffer.delete(frameNum);
+                    }
+                }
 
-            if (bitmap) {
-                // ... (drawing logic same as before) ...
+                // Draw the chosen frame.
+                const { bitmap } = this._buffer.get(bestFrameNum);
+                if (this._canvas.width !== bitmap.width || this._canvas.height !== bitmap.height) {
+                    this._canvas.width  = bitmap.width;
+                    this._canvas.height = bitmap.height;
+                }
                 this._ctx.drawImage(bitmap, 0, 0);
                 bitmap.close();
-                this._buffer.delete(this._nextFrame);
-                this._nextFrame++; // Advance to the next EXPECTED dropped-frame index
-                this._correctAudioSync();
+                this._buffer.delete(bestFrameNum);
+                this._nextFrame = bestFrameNum + 1;
             } else {
-                // If we are missing a frame, check if a FUTURE frame exists.
-                // If it does, we just skipped one; if not, we are starving.
-                const hasFutureFrame = Array.from(this._buffer.keys()).some(k => k > this._nextFrame);
-                if (hasFutureFrame) {
-                    this._nextFrame++;
-                } else {
-                    this._enterBuffering(true);
+                // No frame is ready for the current playback position.
+                // Check whether we have any future frames at all.
+                if (this._buffer.size === 0) {
+                    // Completely empty — starvation.
+                    this._prebufferOrigin = now;
+                    this._enterBuffering();
                     return;
                 }
+                // Frames exist but are all in the future — wait for source to
+                // catch up (this can happen briefly after a snap-back seek).
             }
 
             this._tick();
         });
     }
 
-    // ── Audio sync ────────────────────────────────────────────────────────────
+    // ── Overlay helpers ───────────────────────────────────────────────────────
 
-    _correctAudioSync() {
-        if (this._playStartTime === null) return;
-        const fps             = this._estimateFps();
-        const expectedSrcTime = this._playStartSrcT + (this._nextFrame - 1) / fps;
-        const drift           = this._source.currentTime - expectedSrcTime;
-        if (Math.abs(drift) > SYNC_THRESHOLD_S) {
-            // Keep internalPlayback true until the 'seeked' event fires —
-            // currentTime assignment fires 'seeked' asynchronously, so clearing
-            // the flag synchronously would let the pipeline treat it as a user seek.
-            this.internalPlayback = true;
-            const onSyncSeeked = () => { this.internalPlayback = false; };
-            this._source.addEventListener("seeked", onSyncSeeked, { once: true });
-            this._source.currentTime = expectedSrcTime;
-        }
-    }
-
-    // ── Helpers ───────────────────────────────────────────────────────────────
-
-    _recordRtt(rttMs) {
-        this._rttSamples.push(rttMs);
-        if (this._rttSamples.length > 30) this._rttSamples.shift();
-    }
-
-    _estimateFps() {
-        return VIDEO_FPS_TARGET; // The renderer now operates at the throttled rate
-    }
-
-    _showBufferingOverlay(show) {
-        if (!show) return;
+    _showBufferingOverlay() {
         const w = this._canvas.width  || 320;
         const h = this._canvas.height || 180;
         this._ctx.fillStyle = "rgba(0,0,0,0.6)";
         this._ctx.fillRect(0, 0, w, h);
         this._ctx.fillStyle = "#ffffff";
         this._ctx.font = "16px sans-serif";
-        this._ctx.textAlign = "center";
+        this._ctx.textAlign    = "center";
         this._ctx.textBaseline = "middle";
         this._ctx.fillText("Buffering…", w / 2, h / 2);
     }
 
     _clearOverlay() {
-        // Draw the first buffered frame immediately so there's no black flash
-        const bitmap = this._buffer.get(this._nextFrame);
-        if (bitmap) {
+        // Draw the first available buffered frame immediately to avoid a black flash.
+        // _tick() will take over from here and won't re-consume this frame because
+        // we don't delete it from the buffer.
+        let earliest = null;
+        for (const [frameNum, entry] of this._buffer) {
+            if (earliest === null || frameNum < earliest) earliest = frameNum;
+        }
+        if (earliest !== null) {
+            const { bitmap } = this._buffer.get(earliest);
             if (this._canvas.width !== bitmap.width || this._canvas.height !== bitmap.height) {
                 this._canvas.width  = bitmap.width;
                 this._canvas.height = bitmap.height;
             }
             this._ctx.drawImage(bitmap, 0, 0);
-            // Don't consume it from the buffer — _tick will do that
         }
-    }
-
-    destroy() {
-        this._stopPlaybackLoop();
-        for (const [, bmp] of this._buffer) bmp.close();
-        this._buffer.clear();
     }
 }

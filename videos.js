@@ -1,33 +1,32 @@
 /**
  * videos.js – Video detection and handling
  *
- * Two independent features are managed here:
+ * Two mutually exclusive features:
  *
- *   1. removeVideos (existing): replaces <video> elements with a static
- *      placeholder clip — unchanged from the original implementation.
+ *   1. removeVideos: replaces <video> elements with a static placeholder clip.
  *
- *   2. censorVideos (new): intercepts <video> elements, sends frames
- *      frame-by-frame over a WebSocket to wss://localhost:8443/censor_videos,
- *      and displays the censored frames on a <canvas> in place of the video.
- *      Controlled by settings.censorVideos (distinct from removeVideos).
+ *   2. censorVideos: intercepts <video> elements, sends frames over a WebSocket
+ *      to wss://localhost:8443/censor_video, and displays the censored frames
+ *      on a <canvas> in place of the video.
+ *
+ * The two features are mutually exclusive. Enabling one will disable the other.
  *
  * Load order requirement (manifest.json):
  *   state.js → … → video_ws.js → video_capture.js → video_renderer.js
  *   → video_pipeline.js → videos.js → …
  */
 
-// ── Feature 1: removeVideos (original, unchanged) ────────────────────────────
+// ── Feature 1: removeVideos ───────────────────────────────────────────────────
 
-// Maps each placeholder <video> → the original <video> it replaced.
 const videoOriginals = new WeakMap();
 
-/**
- * Called whenever the removeVideos toggle changes.
- * - Turning ON:  find all videos and replace them with the placeholder.
- * - Turning OFF: restore every video we replaced.
- */
 function applyVideoSetting() {
     if (settings.removeVideos) {
+        // Tear down any active censor pipelines first.
+        if (settings.censorVideos) {
+            settings.censorVideos = false;
+            applyCensorVideoSetting();
+        }
         document.querySelectorAll("video").forEach(replaceVideoIfNeeded);
     } else {
         for (const placeholder of document.querySelectorAll("video[data-censor-video-placeholder]")) {
@@ -39,13 +38,9 @@ function applyVideoSetting() {
     }
 }
 
-/**
- * Replace a single <video> with a placeholder if removeVideos is on
- * and it hasn't already been replaced.
- */
 function replaceVideoIfNeeded(video) {
     if (!settings.removeVideos) return;
-    if (videoOriginals.has(video)) return;  // already replaced
+    if (videoOriginals.has(video)) return;
 
     const placeholder = document.createElement("video");
     placeholder.setAttribute("data-censor-video-placeholder", "true");
@@ -59,12 +54,8 @@ function replaceVideoIfNeeded(video) {
     video.replaceWith(placeholder);
 }
 
-// ── Feature 2: censorVideos (new) ────────────────────────────────────────────
+// ── Feature 2: censorVideos ───────────────────────────────────────────────────
 
-/**
- * Called from the pipeline and MutationObserver for each new <video> element.
- * Skips elements that are our own injected placeholders or canvas wrappers.
- */
 function censorVideoIfNeeded(video) {
     if (!settings.censorVideos) return;
     if (video.hasAttribute("data-censor-video-placeholder")) return;
@@ -74,15 +65,29 @@ function censorVideoIfNeeded(video) {
     startVideoCensorPipeline(video);
 }
 
-/**
- * Called whenever the censorVideos toggle changes.
- * - Turning ON:  start pipelines for all current videos.
- * - Turning OFF: tear down all active pipelines and restore originals.
- */
 function applyCensorVideoSetting() {
     if (settings.censorVideos) {
+        // Tear down any active remove-video placeholders first.
+        if (settings.removeVideos) {
+            settings.removeVideos = false;
+            applyVideoSetting();
+        }
         document.querySelectorAll("video").forEach(censorVideoIfNeeded);
     } else {
+        document.querySelectorAll("video[data-censor-source]").forEach(v => {
+            // Walk up to find the original video element tracked by the pipeline.
+            // stopVideoCensorPipeline expects the *original* video, which the
+            // pipeline stored in _activePipelines keyed by the original element.
+            // The MutationObserver / initial scan always calls us with the original,
+            // but if called from applyCensorVideoSetting we need to find originals.
+            const wrapper = v.closest("[data-censor-wrapper]");
+            if (wrapper) {
+                const original = wrapper.__censorOriginal;
+                if (original) stopVideoCensorPipeline(original);
+            }
+        });
+
+        // Fallback: also attempt to stop any video that might be the original.
         document.querySelectorAll("video").forEach(v => stopVideoCensorPipeline(v));
     }
 }

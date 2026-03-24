@@ -22,7 +22,7 @@ const SETTING_DEFAULTS = {
 // These are hard-coded defaults; future work could expose them in the options UI.
 
 /** Maximum number of frames sent to the WS server that have not yet been returned. */
-const VIDEO_MAX_IN_FLIGHT = 20;
+const VIDEO_MAX_IN_FLIGHT = 128;
 
 /** Image format for encoded frames: 'jpeg' | 'png' | 'webp' */
 let videoFrameFormat = 'webp';
@@ -38,7 +38,7 @@ let frameCompressionLevel = 0.5;
 let videoPrebufferSeconds = 3;
 
 // Target frames per second to send to the backend to prevent buffer starvation.
-const VIDEO_FPS_TARGET = 15;
+const VIDEO_FPS_TARGET = 10;
 
 // Populated once storage + filters are both ready.
 let ENDPOINTS = null;

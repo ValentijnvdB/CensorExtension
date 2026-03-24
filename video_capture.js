@@ -1,39 +1,64 @@
 /**
  * video_capture.js – Frame capture from a source <video> element
  *
- * Two capture modes:
- *   playing: requestVideoFrameCallback (or rAF fallback) — driven by the
- *            video's natural cadence, fires once per new frame.
- *   paused:  setTimeout loop at 1000/fps ms — keeps sending frames to the
- *            backend even when the source is paused due to buffer starvation,
- *            so the buffer can refill and playback can resume.
+ * Two capture modes, selected automatically:
  *
- * We never seek the video ourselves.
+ *   PLAYING (rVFC/rAF):
+ *     Used when the source video is playing normally. Fires once per new
+ *     frame via requestVideoFrameCallback (or rAF fallback), throttled to
+ *     VIDEO_FPS_TARGET.
  *
- * Emits: onFrame(frameNum: number, bytes: ArrayBuffer)
+ *   STEPPING (seek-step loop):
+ *     Used when the source is paused — either during initial prebuffering or
+ *     when the user has manually paused. Advances source.currentTime by
+ *     1/VIDEO_FPS_TARGET per step, waits for the 'seeked' event to confirm
+ *     the browser has landed at the new position, then captures the frame.
+ *     Gated by VIDEO_MAX_IN_FLIGHT so we don't flood the backend.
+ *
+ * isStepping is a public flag read by VideoPipeline._onSeeked() to suppress
+ * buffer flushes triggered by our own internal seeks.
+ *
+ * Emits: onFrame(frameNum: number, captureTime: number, bytes: ArrayBuffer)
+ *   captureTime is source.currentTime at the moment of capture, used by the
+ *   renderer to display frames in sync with the audio clock.
  */
 
 class VideoCapture {
-    constructor(sourceVideo, onFrame) {
-        this._source    = sourceVideo;
-        this._onFrame   = onFrame;
+    /**
+     * @param {HTMLVideoElement} sourceVideo
+     * @param {function(frameNum, captureTime, bytes)} onFrame
+     * @param {function(): boolean} isBufferFull
+     *   Returns true when the renderer's buffer has enough frames and capture
+     *   should stop stepping. Only consulted in stepping mode — in playing mode
+     *   the rVFC cadence naturally limits output to the video's frame rate.
+     */
+    constructor(sourceVideo, onFrame, isBufferFull) {
+        this._source       = sourceVideo;
+        this._onFrame      = onFrame;
+        this._isBufferFull = isBufferFull;
         this._frameNum  = 0;
         this._capturing = false;
 
-        this._canvas = document.createElement("canvas");
-        this._ctx    = this._canvas.getContext("2d");
-
         this._inFlightCount = 0;
-        this._rafHandle     = null;   // rVFC / rAF handle (playing mode)
-        this._timerHandle   = null;   // setTimeout handle (paused mode)
+
+        // rVFC / rAF state (playing mode)
+        this._rafHandle     = null;
         this._lastVideoTime = -1;
+
+        // Seek-step state (stepping mode)
+        this._stepping        = false; // true while the seek-step loop is active
+        this._stepPending     = false; // true while waiting for 'seeked' to fire
+        this._stepQueued      = false; // true if a step was requested while one was in flight
 
         this._boundRvfcLoop    = this._rvfcLoop.bind(this);
         this._boundRafFallback = this._rafFallbackLoop.bind(this);
-        this._boundPausedTick  = this._pausedTick.bind(this);
 
-        // Switch modes automatically when the source video pauses/plays
-        this._boundOnPause = () => { if (this._capturing) this._enterPausedMode(); };
+        // FPS instrumentation — ring buffer of dispatch timestamps (ms).
+        this._dispatchTimestamps = [];
+        this._lastFpsLog         = 0;
+
+        // Switch modes when the source transitions between playing and paused.
+        this._boundOnPause = () => { if (this._capturing) this._enterSteppingMode(); };
         this._boundOnPlay  = () => { if (this._capturing) this._enterPlayingMode(); };
         this._source.addEventListener("pause", this._boundOnPause);
         this._source.addEventListener("play",  this._boundOnPlay);
@@ -41,11 +66,14 @@ class VideoCapture {
 
     // ── Public API ────────────────────────────────────────────────────────────
 
+    /** True while the seek-step loop is advancing currentTime internally. */
+    get isStepping() { return this._stepping; }
+
     start() {
         if (this._capturing) return;
         this._capturing = true;
         if (this._source.paused) {
-            this._enterPausedMode();
+            this._enterSteppingMode();
         } else {
             this._enterPlayingMode();
         }
@@ -53,7 +81,9 @@ class VideoCapture {
 
     stop() {
         this._capturing = false;
-        this._cancelHandles();
+        this._cancelRafHandle();
+        // Note: we do NOT abort an in-progress step tick here — the pending
+        // 'seeked' listener is harmless and will self-cancel on next tick check.
     }
 
     reset() {
@@ -61,20 +91,35 @@ class VideoCapture {
         this._frameNum      = 0;
         this._inFlightCount = 0;
         this._lastVideoTime = -1;
+        this._stepping      = false;
+        this._stepPending   = false;
+        this._stepQueued    = false;
     }
 
-    get isStepping() { return false; }
-
+    /**
+     * Called by VideoRenderer once a frame has been decoded and placed in the
+     * buffer, decrementing the in-flight count and potentially unblocking the
+     * next step.
+     */
     frameCompleted() {
         this._inFlightCount = Math.max(0, this._inFlightCount - 1);
-        console.log("[VideoCensor] frameCompleted, inFlight=", this._inFlightCount, "paused=", this._source.paused, "rafHandle=", this._rafHandle, "timerHandle=", this._timerHandle);
-        // Resume whichever loop was stalled due to back-pressure
-        if (this._capturing && this._rafHandle === null && this._timerHandle === null) {
-            console.log("[VideoCensor] ============================== RESUMING LOOP ======================");
-            if (this._source.paused) {
-                this._enterPausedMode();
-            } else {
-                this._enterPlayingMode();
+
+        if (!this._capturing) return;
+
+        if (this._source.paused) {
+            // Stepping mode: try to schedule the next step. _scheduleStep will
+            // re-check isBufferFull and the in-flight gate itself.
+            if (!this._stepping) {
+                // Buffer may have drained below the full threshold — restart.
+                this._enterSteppingMode();
+            } else if (this._stepQueued) {
+                this._stepQueued = false;
+                this._scheduleStep();
+            }
+        } else {
+            // Playing mode: a slot freed up — reschedule rVFC if it was stalled.
+            if (this._rafHandle === null) {
+                this._scheduleRvfc();
             }
         }
     }
@@ -88,20 +133,18 @@ class VideoCapture {
     // ── Playing mode: rVFC / rAF ──────────────────────────────────────────────
 
     _enterPlayingMode() {
-        this._cancelTimerHandle(); // stop paused loop if running
+        this._stepping = false;
         this._scheduleRvfc();
     }
 
     _scheduleRvfc() {
         if (!this._capturing) return;
-        // CRITICAL: If the video is paused (even by the renderer),
-        // rvfc/rAF will not fire. We must switch to the timer loop.
         if (this._source.paused) {
-            this._enterPausedMode();
+            // Video was paused between the mode switch and this call.
+            this._enterSteppingMode();
             return;
         }
-
-        if (this._inFlightCount > (VIDEO_MAX_IN_FLIGHT || 10)) return;
+        if (this._inFlightCount >= VIDEO_MAX_IN_FLIGHT) return;
         if (this._rafHandle !== null) return;
 
         if ("requestVideoFrameCallback" in HTMLVideoElement.prototype) {
@@ -116,15 +159,14 @@ class VideoCapture {
         if (!this._capturing) return;
 
         const targetInterval = 1 / VIDEO_FPS_TARGET;
-        const currentTime = this._source.currentTime;
+        const currentTime    = this._source.currentTime;
 
-        // Only capture if the video has progressed by at least 1/FPS_TARGET seconds
         if (this._lastVideoTime === -1 || (currentTime - this._lastVideoTime) >= targetInterval) {
             this._lastVideoTime = currentTime;
             this._captureCurrentFrame();
         }
 
-        if (this._inFlightCount <= VIDEO_MAX_IN_FLIGHT) {
+        if (this._inFlightCount < VIDEO_MAX_IN_FLIGHT) {
             this._scheduleRvfc();
         }
     }
@@ -137,75 +179,9 @@ class VideoCapture {
             this._lastVideoTime = vt;
             this._captureCurrentFrame();
         }
-        if (this._inFlightCount <= VIDEO_MAX_IN_FLIGHT) {
+        if (this._inFlightCount < VIDEO_MAX_IN_FLIGHT) {
             this._rafHandle = requestAnimationFrame(this._boundRafFallback);
         }
-    }
-
-    // ── Paused mode: setTimeout loop ──────────────────────────────────────────
-
-    _enterPausedMode() {
-        console.log("[VideoCensor] capture: entering paused mode, inFlight=", this._inFlightCount);
-        this._cancelRafHandle(); // stop rVFC if running
-        this._schedulePausedTick();
-    }
-
-    _schedulePausedTick() {
-        if (!this._capturing) return;
-        if (this._inFlightCount > (VIDEO_MAX_IN_FLIGHT || 10)) return;
-        if (this._timerHandle !== null) return;
-
-        // Use a fixed high-frequency tick when buffering to refill quickly
-        const fps = 25;
-        this._timerHandle = setTimeout(this._boundPausedTick, 1000 / fps);
-    }
-
-    _pausedTick() {
-        this._timerHandle = null;
-        if (!this._capturing) return;
-
-        this._captureCurrentFrame();
-
-        if (this._source.paused) {
-            this._schedulePausedTick();
-        } else {
-            this._enterPlayingMode();
-        }
-    }
-
-    // ── Shared ────────────────────────────────────────────────────────────────
-
-    _captureCurrentFrame() {
-        const v = this._source;
-        if (!v.videoWidth) return;
-
-        // 1. Immediately increment in-flight count
-        // This allows the next RVFC tick to proceed while this frame is encoding
-        this._inFlightCount++;
-
-        // 2. Use a "Pool" of canvases if needed, or draw immediately
-        // If you draw to the same canvas repeatedly while toBlob is running,
-        // you might get "smearing". It is safer to use a temporary canvas for the encoding.
-        const tempCanvas = document.createElement('canvas');
-        tempCanvas.width = v.videoWidth;
-        tempCanvas.height = v.videoHeight;
-        const tempCtx = tempCanvas.getContext('2d');
-        tempCtx.drawImage(v, 0, 0);
-
-        const frameNum = this._frameNum++;
-
-        // 3. Fire and Forget the encoding
-        tempCanvas.toBlob((blob) => {
-            if (!blob) {
-                this._inFlightCount--;
-                return;
-            }
-            blob.arrayBuffer().then(bytes => {
-                // This frame is now TRULY in flight (on the wire)
-                this._onFrame(frameNum, bytes);
-                // Note: _inFlightCount is decremented in VideoRenderer.receiveFrame
-            });
-        }, `image/${videoFrameFormat}`, frameCompressionLevel);
     }
 
     _cancelRafHandle() {
@@ -219,15 +195,118 @@ class VideoCapture {
         }
     }
 
-    _cancelTimerHandle() {
-        if (this._timerHandle !== null) {
-            clearTimeout(this._timerHandle);
-            this._timerHandle = null;
-        }
+    // ── Stepping mode: seek-step loop ─────────────────────────────────────────
+
+    _enterSteppingMode() {
+        this._cancelRafHandle();
+        this._stepping = true;
+        this._scheduleStep();
     }
 
-    _cancelHandles() {
-        this._cancelRafHandle();
-        this._cancelTimerHandle();
+    _scheduleStep() {
+        if (!this._capturing || !this._stepping) return;
+        if (this._stepPending) return; // already waiting for 'seeked'
+
+        // Stop stepping if the renderer's buffer is already full.
+        // _enterSteppingMode() / frameCompleted() will restart us if more
+        // frames are needed later (e.g. starvation or seek).
+        if (this._isBufferFull()) {
+            this._stepping = false;
+            return;
+        }
+
+        if (this._inFlightCount >= VIDEO_MAX_IN_FLIGHT) {
+            // Will be retried from frameCompleted()
+            this._stepQueued = true;
+            return;
+        }
+
+        this._stepPending = true;
+
+        // Advance currentTime by one frame interval.
+        const nextTime = this._source.currentTime + (1 / VIDEO_FPS_TARGET);
+        const duration = this._source.duration;
+
+        if (isFinite(duration) && nextTime > duration) {
+            // Reached end of video — stop stepping.
+            this._stepping    = false;
+            this._stepPending = false;
+            return;
+        }
+
+        // Wait for the browser to confirm it has seeked to (approximately)
+        // the requested position before capturing.
+        const onSeeked = () => {
+            this._stepPending = false;
+            if (!this._capturing || !this._stepping) return;
+
+            // If the source started playing again (user hit play), hand off to
+            // playing mode — it will take over from the current position.
+            if (!this._source.paused) {
+                this._stepping = false;
+                this._enterPlayingMode();
+                return;
+            }
+
+            this._captureCurrentFrame();
+
+            // Schedule the next step (gated again by in-flight count).
+            this._scheduleStep();
+        };
+
+        this._source.addEventListener("seeked", onSeeked, { once: true });
+        this._source.currentTime = nextTime;
+    }
+
+    // ── Shared ────────────────────────────────────────────────────────────────
+
+    _captureCurrentFrame() {
+        const v = this._source;
+        if (!v.videoWidth) return;
+
+        // Record captureTime before any async work so it matches this exact frame.
+        const captureTime = v.currentTime;
+        const frameNum    = this._frameNum++;
+
+        this._inFlightCount++;
+
+        const tempCanvas = document.createElement("canvas");
+        tempCanvas.width  = v.videoWidth;
+        tempCanvas.height = v.videoHeight;
+        tempCanvas.getContext("2d").drawImage(v, 0, 0);
+
+        tempCanvas.toBlob((blob) => {
+            if (!blob) {
+                this._inFlightCount--;
+                return;
+            }
+            blob.arrayBuffer().then(bytes => {
+                this._recordDispatch();
+                this._onFrame(frameNum, captureTime, bytes);
+            });
+        }, `image/${videoFrameFormat}`, frameCompressionLevel);
+    }
+
+    // ── FPS instrumentation ───────────────────────────────────────────────────
+
+    _recordDispatch() {
+        const now = performance.now();
+        this._dispatchTimestamps.push(now);
+
+        // Evict timestamps older than 10 seconds.
+        const cutoff = now - 10_000;
+        while (this._dispatchTimestamps.length > 0 && this._dispatchTimestamps[0] < cutoff) {
+            this._dispatchTimestamps.shift();
+        }
+
+        // Log once per second.
+        if (now - this._lastFpsLog >= 1_000) {
+            this._lastFpsLog = now;
+            const windowMs  = Math.min(now - (this._dispatchTimestamps[0] ?? now), 10_000);
+            const avgFps    = windowMs > 0
+                ? (this._dispatchTimestamps.length / (windowMs / 1_000)).toFixed(2)
+                : "0.00";
+            console.log(`[VideoCensor] send FPS (last 10 s): ${avgFps}`);
+        }
     }
 }
