@@ -26,7 +26,7 @@
 class VideoCapture {
     /**
      * @param {HTMLVideoElement} sourceVideo
-     * @param {function(frameNum, captureTime, bytes)} onFrame
+     * @param {function(frameNum, captureTime, stepping, bytes)} onFrame
      * @param {function(): boolean} isBufferFull
      *   Returns true when the renderer's buffer has enough frames and capture
      *   should stop stepping. Only consulted in stepping mode — in playing mode
@@ -240,6 +240,13 @@ class VideoCapture {
             this._stepPending = false;
             if (!this._capturing || !this._stepping) return;
 
+            // Abort if the buffer filled up while we were waiting for the seek.
+            // This prevents intercepting the VideoRenderer's snap-back seek.
+            if (this._isBufferFull()) {
+                this._stepping = false;
+                return;
+            }
+
             // If the source started playing again (user hit play), hand off to
             // playing mode — it will take over from the current position.
             if (!this._source.paused) {
@@ -278,10 +285,19 @@ class VideoCapture {
         // that IS the meaningful ordering key, and performance.now() would
         // just reflect wall-clock dispatch order which could differ if seeks
         // resolve out of order.
-        const captureTime = this._stepping
-            ? v.currentTime * 1000   // seconds → ms, same unit as performance.now()
-            : performance.now();
+        // In PLAYING mode, use performance.now() — strictly monotonic, sub-ms
+        // resolution, guaranteed unique across capture ticks.
+        // In STEPPING mode, use source.currentTime * 1000 — the seek-step loop
+        // controls exactly which position is captured, so video time is the
+        // correct ordering key. performance.now() here would reflect wall-clock
+        // dispatch order, which can differ from seek order if seeks resolve
+        // out of order.
+        // We pass `stepping` alongside captureTime so the renderer can
+        // reliably identify which timeline a frame belongs to — no heuristics.
+        const stepping    = this._stepping;
+        const captureTime = v.currentTime * 1000;
         const frameNum = this._frameNum++;
+        this._lastVideoTime = v.currentTime;
 
         this._inFlightCount++;
 
@@ -297,7 +313,7 @@ class VideoCapture {
             }
             blob.arrayBuffer().then(bytes => {
                 this._recordDispatch();
-                this._onFrame(frameNum, captureTime, bytes);
+                this._onFrame(frameNum, captureTime, true, bytes);
             });
         }, `image/${videoFrameFormat}`, frameCompressionLevel);
     }

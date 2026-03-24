@@ -35,7 +35,7 @@ let frameCompressionLevel = 0.5;
  * The pipeline stays in BUFFERING state until this many seconds' worth of
  * frames are ready, then unpauses the output canvas and audio.
  */
-let videoPrebufferSeconds = 3;
+let videoPrebufferSeconds = 10;
 
 // Target frames per second to send to the backend to prevent buffer starvation.
 const VIDEO_FPS_TARGET = 10;

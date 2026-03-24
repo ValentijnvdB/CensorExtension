@@ -49,8 +49,8 @@ class VideoPipeline {
         // onFrame now receives (frameNum, captureTime, bytes).
         this._capture = new VideoCapture(
             source,
-            (frameNum, captureTime, bytes) => {
-                this._renderer.recordFrameDispatch(frameNum, captureTime);
+            (frameNum, captureTime, stepping, bytes) => {
+                this._renderer.recordFrameDispatch(frameNum, captureTime, stepping);
                 videoWsSend(this._id, this._renderer.seekId, frameNum, bytes);
             },
             () => this._renderer.isBufferFull(),

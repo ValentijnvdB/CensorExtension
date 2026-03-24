@@ -54,9 +54,11 @@ class VideoRenderer {
 
         this._rafHandle = null;
 
-        // captureTime recorded at dispatch, looked up when frame returns.
-        // frameNum → captureTime (number, milliseconds — performance.now() in
-        // playing mode, source.currentTime*1000 in stepping mode)
+        // Metadata recorded at dispatch, looked up when the processed frame returns.
+        // frameNum → { captureTime: number (ms), stepping: boolean }
+        //   captureTime: performance.now() in playing mode,
+        //                source.currentTime*1000 in stepping mode.
+        //   stepping: true if captured during seek-step (prebuffer/paused).
         this._captureTimeMap = new Map();
 
         this._prebufferFrames = 0;
@@ -104,8 +106,8 @@ class VideoRenderer {
      * Record the captureTime for a frame at the moment it is dispatched to
      * the backend, so it is available when the processed frame returns.
      */
-    recordFrameDispatch(frameNum, captureTime) {
-        this._captureTimeMap.set(frameNum, captureTime);
+    recordFrameDispatch(frameNum, captureTime, stepping) {
+        this._captureTimeMap.set(frameNum, { captureTime, stepping });
     }
 
     /**
@@ -119,25 +121,29 @@ class VideoRenderer {
             return;
         }
 
-        const captureTime = this._captureTimeMap.get(frameNum);
+        const dispatch = this._captureTimeMap.get(frameNum);
         this._captureTimeMap.delete(frameNum);
 
         createImageBitmap(new Blob([bytes])).then(bitmap => {
             onConsumed();
 
-            // If we already have a clock sync and this frame's captureTime is
-            // still in video-time space (stepping mode, late return), normalise
-            // it now so _tick() can compare it correctly.
-            let ct = captureTime ?? 0;
-            if (this._clockSync && ct < this._clockSync.perfNow * 0.01) {
+            let ct       = dispatch?.captureTime ?? 0;
+            const isStepping = dispatch?.stepping ?? false;
+
+            // If this is a stepping-mode frame and we already have a clock sync,
+            // rewrite its captureTime from video-time space (currentTime*1000)
+            // into performance.now() space so _tick() can compare it against
+            // playing-mode frames on a single timeline.
+            // We use the explicit `stepping` flag — no threshold heuristics.
+            if (isStepping && this._clockSync) {
                 const videoT = ct / 1000;
                 const oldCt  = ct;
                 ct = this._clockSync.perfNow +
-                    (videoT - this._clockSync.videoTime) * 1000;
+                     (videoT - this._clockSync.videoTime) * 1000;
                 console.log(`[VC:recv]  late stepping frame ${frameNum}: ct ${oldCt.toFixed(1)}ms (videoT=${videoT.toFixed(3)}s) → ${ct.toFixed(1)}ms`);
             }
 
-            this._buffer.set(frameNum, { bitmap, captureTime: ct });
+            this._buffer.set(frameNum, { bitmap, captureTime: ct, stepping: isStepping });
             if (this._state === RendererState.BUFFERING) {
                 this._checkPrebuffer();
             }
@@ -324,27 +330,28 @@ class VideoRenderer {
         // perf timeline.  Future frames (T > videoTime) get a future perf time;
         // past frames (T < videoTime) get a past perf time — both correct.
         //
-        // We identify stepping-mode frames by their captureTime being much
-        // smaller than any plausible performance.now() value: video positions
-        // are at most a few hours (< ~10_000_000 ms), while performance.now()
-        // for a live page is typically > 1_000_000 ms after a minute of use.
-        // We use perfNow * 0.01 as the threshold — a value must be below 1%
-        // of the current perf time to be considered video-time-space.
-        const threshold = perfNow * 0.01;
+        // We use the explicit entry.stepping flag written at capture time to
+        // identify frames in video-time space. This is reliable regardless of
+        // when in the page's lifetime the session starts.
+        // Rewrite stepping-mode frames from video-time space into perf space.
+        // We use the explicit entry.stepping flag set at capture time — no
+        // threshold heuristics that break when page load time and video time
+        // happen to overlap (e.g. early in a session).
         let rewriteCount = 0;
         for (const [frameNum, entry] of this._buffer) {
-            if (entry.captureTime < threshold) {
-                const videoT = entry.captureTime / 1000; // back to seconds
-                const oldCt  = entry.captureTime;
+            if (entry.stepping) {
+                const videoT  = entry.captureTime / 1000;
+                const oldCt   = entry.captureTime;
                 entry.captureTime = perfNow + (videoT - videoTime) * 1000;
+                entry.stepping    = false; // now in perf space, treat as playing
                 rewriteCount++;
                 console.log(`[VC:sync]  rewrite frame ${frameNum}: ct ${oldCt.toFixed(1)}ms (videoT=${videoT.toFixed(3)}s) → ${entry.captureTime.toFixed(1)}ms`);
             }
         }
         if (rewriteCount === 0) {
-            console.log(`[VC:sync]  no stepping frames to rewrite (bufSize=${this._buffer.size}, threshold=${threshold.toFixed(1)}ms)`);
+            console.log(`[VC:sync]  no stepping frames to rewrite (bufSize=${this._buffer.size})`);
             for (const [frameNum, entry] of this._buffer) {
-                console.log(`[VC:sync]    frame ${frameNum}: ct=${entry.captureTime.toFixed(1)}ms`);
+                console.log(`[VC:sync]    frame ${frameNum}: ct=${entry.captureTime.toFixed(1)}ms  stepping=${entry.stepping}`);
             }
         }
     }
@@ -376,20 +383,21 @@ class VideoRenderer {
             const videoTimeMs = this._source.currentTime * 1000;
             const now = this._clockSync
                 ? this._clockSync.perfNow +
-                (this._source.currentTime - this._clockSync.videoTime) * 1000
+                  (this._source.currentTime - this._clockSync.videoTime) * 1000
                 : videoTimeMs;
 
             // Find the best frame to display: among all frames whose captureTime
-            // is <= now (i.e. due to be shown), pick the one with the highest
-            // frameNum. frameNum is a strictly monotonic counter assigned at
-            // capture time, so it correctly breaks ties when two frames share a
-            // captureTime (possible within a single rVFC tick).
+            // is <= now (i.e. due to be shown), pick the one closest to 'now'
+            // (highest captureTime). Use frameNum strictly to break ties.
             let bestFrameNum    = null;
             let bestCaptureTime = -Infinity;
 
             for (const [frameNum, { captureTime }] of this._buffer) {
                 if (captureTime <= now) {
-                    if (bestFrameNum === null || frameNum > bestFrameNum) {
+                    // FIX: Maximize captureTime first. Only fallback to frameNum for exact ties.
+                    if (bestFrameNum === null ||
+                        captureTime > bestCaptureTime ||
+                        (captureTime === bestCaptureTime && frameNum > bestFrameNum)) {
                         bestFrameNum    = frameNum;
                         bestCaptureTime = captureTime;
                     }
