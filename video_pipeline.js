@@ -136,6 +136,10 @@ class VideoPipeline {
 
         this._wrapper.appendChild(this._canvas);
         this._wrapper.appendChild(source);
+
+        // Store a back-reference so applyCensorVideoSetting() in videos.js can
+        // retrieve the original element to call stopVideoCensorPipeline() with.
+        this._wrapper.__censorOriginal = v;
     }
 
     // ── Source video resolution ───────────────────────────────────────────────

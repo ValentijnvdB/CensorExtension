@@ -265,8 +265,23 @@ class VideoCapture {
         if (!v.videoWidth) return;
 
         // Record captureTime before any async work so it matches this exact frame.
-        const captureTime = v.currentTime;
-        const frameNum    = this._frameNum++;
+        //
+        // In PLAYING mode we use performance.now() (milliseconds) because
+        // source.currentTime only updates at the video's native frame rate and
+        // can repeat across multiple capture ticks at VIDEO_FPS_TARGET, making
+        // ordering ambiguous. performance.now() is strictly monotonic with
+        // sub-millisecond resolution, so every frame in playing mode gets a
+        // unique, correctly-ordered timestamp.
+        //
+        // In STEPPING mode we use source.currentTime (seconds → ms) because
+        // the seek-step loop explicitly sets currentTime to known positions —
+        // that IS the meaningful ordering key, and performance.now() would
+        // just reflect wall-clock dispatch order which could differ if seeks
+        // resolve out of order.
+        const captureTime = this._stepping
+            ? v.currentTime * 1000   // seconds → ms, same unit as performance.now()
+            : performance.now();
+        const frameNum = this._frameNum++;
 
         this._inFlightCount++;
 
