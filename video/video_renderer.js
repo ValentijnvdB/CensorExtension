@@ -206,7 +206,7 @@ class VideoRenderer {
         this._stopPlaybackLoop();
         console.log(`[VideoCensor] → BUFFERING  videoTime=${this._source.currentTime.toFixed(3)}s`);
 
-        this._prebufferFrames = Math.ceil(VIDEO_FPS_TARGET * videoPrebufferSeconds);
+        this._prebufferFrames = Math.ceil(videoTargetFps * videoPrebufferSeconds);
 
         // Record where we are so we can snap back when PLAYING starts.
         this._prebufferOrigin = this._source.currentTime;

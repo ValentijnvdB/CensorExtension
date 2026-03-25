@@ -11,34 +11,39 @@ const DEFAULTS = {
 };
 
 const SETTING_DEFAULTS = {
-    extensionEnabled: true,
-    removeGifs:    false,
-    removeVideos:  false,
-    censorVideos:  false,
-    loadBehavior:  'blur',
+    extensionEnabled:      true,
+    gifBehavior:           'remove',  // 'nothing' | 'remove' | 'censor'
+    videoBehavior:         'remove',  // 'nothing' | 'remove' | 'censor'
+    loadBehavior:          'blur',
+    // Video config (previously hard-coded)
+    videoPrebufferSeconds: 10,
+    videoTargetFps:        10,
+    videoMaxInFlight:      128,
+    videoFrameFormat:      'webp',
+    frameCompressionLevel: 0.5,
 };
 
 // ── Video censoring config ────────────────────────────────────────────────────
-// These are hard-coded defaults; future work could expose them in the options UI.
+// These start at their defaults and are updated live from storage/popup messages.
 
 /** Maximum number of frames sent to the WS server that have not yet been returned. */
-const VIDEO_MAX_IN_FLIGHT = 128;
+let videoMaxInFlight = SETTING_DEFAULTS.videoMaxInFlight;
 
-/** Image format for encoded frames: 'jpeg' | 'png' | 'webp' */
-let videoFrameFormat = 'webp';
+/** Image format for encoded frames: 'jpeg' | 'webp' */
+let videoFrameFormat = SETTING_DEFAULTS.videoFrameFormat;
 
 /** JPEG/WebP quality (0–1). Only used when videoFrameFormat is 'jpeg' or 'webp'. */
-let frameCompressionLevel = 0.5;
+let frameCompressionLevel = SETTING_DEFAULTS.frameCompressionLevel;
 
 /**
  * How many seconds of frames to buffer before starting playback.
  * The pipeline stays in BUFFERING state until this many seconds' worth of
  * frames are ready, then unpauses the output canvas and audio.
  */
-let videoPrebufferSeconds = 10;
+let videoPrebufferSeconds = SETTING_DEFAULTS.videoPrebufferSeconds;
 
 // Target frames per second to send to the backend to prevent buffer starvation.
-const VIDEO_FPS_TARGET = 10;
+let videoTargetFps = SETTING_DEFAULTS.videoTargetFps;
 
 // Populated once storage + filters are both ready.
 let ENDPOINTS = null;

@@ -146,7 +146,7 @@ class VideoCapture {
             this._enterSteppingMode();
             return;
         }
-        if (this._inFlightCount >= VIDEO_MAX_IN_FLIGHT) return;
+        if (this._inFlightCount >= videoMaxInFlight) return;
         if (this._rafHandle !== null) return;
 
         if ("requestVideoFrameCallback" in HTMLVideoElement.prototype) {
@@ -160,7 +160,7 @@ class VideoCapture {
         this._rafHandle = null;
         if (!this._capturing) return;
 
-        const targetInterval = 1 / VIDEO_FPS_TARGET;
+        const targetInterval = 1 / videoTargetFps;
         const currentTime    = this._source.currentTime;
 
         if (this._lastVideoTime === -1 || (currentTime - this._lastVideoTime) >= targetInterval) {
@@ -168,7 +168,7 @@ class VideoCapture {
             this._captureCurrentFrame();
         }
 
-        if (this._inFlightCount < VIDEO_MAX_IN_FLIGHT) {
+        if (this._inFlightCount < videoMaxInFlight) {
             this._scheduleRvfc();
         }
     }
@@ -181,7 +181,7 @@ class VideoCapture {
             this._lastVideoTime = vt;
             this._captureCurrentFrame();
         }
-        if (this._inFlightCount < VIDEO_MAX_IN_FLIGHT) {
+        if (this._inFlightCount < videoMaxInFlight) {
             this._rafHandle = requestAnimationFrame(this._boundRafFallback);
         }
     }
@@ -217,7 +217,7 @@ class VideoCapture {
             return;
         }
 
-        if (this._inFlightCount >= VIDEO_MAX_IN_FLIGHT) {
+        if (this._inFlightCount >= videoMaxInFlight) {
             // Will be retried from frameCompleted()
             this._stepQueued = true;
             return;
@@ -226,7 +226,7 @@ class VideoCapture {
         this._stepPending = true;
 
         // Advance currentTime by one frame interval.
-        const nextTime = this._source.currentTime + (1 / VIDEO_FPS_TARGET);
+        const nextTime = this._source.currentTime + (1 / videoTargetFps);
         const duration = this._source.duration;
 
         if (isFinite(duration) && nextTime > duration) {

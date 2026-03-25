@@ -8,7 +8,7 @@
 
 async function loadFilters() {
     try {
-        const url      = browser.runtime.getURL("filters.json");
+        const url      = browser.runtime.getURL("src/content/filters.json");
         const response = await fetch(url);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return await response.json();

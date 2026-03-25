@@ -1,61 +1,71 @@
-const SETTING_DEFAULTS = { removeGifs: false, removeVideos: false, censorVideos: false, loadBehavior: 'blur', extensionEnabled: true };
+const SETTING_DEFAULTS = {
+    extensionEnabled:      true,
+    gifBehavior:           'remove',  // 'nothing' | 'remove' | 'censor'
+    videoBehavior:         'remove',  // 'nothing' | 'remove' | 'censor'
+    loadBehavior:          'blur',
+    // Video tab
+    videoPrebufferSeconds: 10,
+    videoTargetFps:        10,
+    videoMaxInFlight:      128,
+    videoFrameFormat:      'webp',
+    frameCompressionLevel: 0.5,
+};
 
 const $ = id => document.getElementById(id);
 
-// ── Load version from manifest ────────────────────────────────────────────────
+// ── Version ───────────────────────────────────────────────────────────────────
 const manifest = browser.runtime.getManifest();
 $("version").textContent = `v${manifest.version}`;
 
-// ── Render saved state ────────────────────────────────────────────────────────
+// ── Load & render saved state ─────────────────────────────────────────────────
 browser.storage.sync.get(SETTING_DEFAULTS).then(settings => {
-    applyToggleUI("extensionEnabled", settings.extensionEnabled);
-    applyToggleUI("removeGifs",    settings.removeGifs);
-    applyToggleUI("removeVideos",  settings.removeVideos);
-    applyToggleUI("censorVideos",  settings.censorVideos);
-    applySelectUI("loadBehavior",  settings.loadBehavior);
+    applyToggleUI("extensionEnabled",       settings.extensionEnabled);
+    applySelectUI("gifBehavior",            settings.gifBehavior);
+    applySelectUI("videoBehavior",          settings.videoBehavior);
+    applySelectUI("loadBehavior",           settings.loadBehavior);
+    applySelectUI("videoFrameFormat",       settings.videoFrameFormat);
+    applyNumericUI("videoPrebufferSeconds", settings.videoPrebufferSeconds);
+    applyNumericUI("videoTargetFps",        settings.videoTargetFps);
+    applyNumericUI("videoMaxInFlight",      settings.videoMaxInFlight);
+    applyNumericUI("frameCompressionLevel", settings.frameCompressionLevel);
 });
 
-// ── Toggle interaction ────────────────────────────────────────────────────────
-for (const setting of ["extensionEnabled", "removeGifs", "removeVideos", "censorVideos"]) {
-    $(`toggle-${setting}`).addEventListener("click", async () => {
-        const current  = await browser.storage.sync.get(SETTING_DEFAULTS);
-        const newValue = !current[setting];
-
-        await browser.storage.sync.set({ [setting]: newValue });
-        applyToggleUI(setting, newValue);
-
-        // Notify all tabs so the content script can react immediately.
-        const tabs = await browser.tabs.query({});
-        for (const tab of tabs) {
-            browser.tabs.sendMessage(tab.id, {
-                type:    "SETTING_CHANGED",
-                setting: setting,
-                value:   newValue,
-            }).catch(() => {
-                // Tab may not have the content script (e.g. about:blank) — ignore.
-            });
-        }
+// ── Tab switching ─────────────────────────────────────────────────────────────
+document.querySelectorAll(".tab-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+        document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+        document.querySelectorAll(".tab-panel").forEach(p => p.classList.add("hidden"));
+        btn.classList.add("active");
+        $(`tab-${btn.dataset.tab}`).classList.remove("hidden");
     });
-}
+});
 
-for (const setting of ["loadBehavior"]) {
+// ── Toggle interactions ───────────────────────────────────────────────────────
+$("toggle-extensionEnabled").addEventListener("click", async () => {
+    const current  = await browser.storage.sync.get(SETTING_DEFAULTS);
+    const newValue = !current.extensionEnabled;
+    await browser.storage.sync.set({ extensionEnabled: newValue });
+    applyToggleUI("extensionEnabled", newValue);
+    broadcast("extensionEnabled", newValue);
+});
+
+// ── Select interactions ───────────────────────────────────────────────────────
+for (const setting of ["gifBehavior", "videoBehavior", "loadBehavior", "videoFrameFormat"]) {
     $(`select-${setting}`).addEventListener("change", async () => {
         const newValue = $(`select-${setting}`).value;
         if (!newValue) return;
-
         await browser.storage.sync.set({ [setting]: newValue });
+        broadcast(setting, newValue);
+    });
+}
 
-        // Notify all tabs so the content script can react immediately.
-        const tabs = await browser.tabs.query({});
-        for (const tab of tabs) {
-            browser.tabs.sendMessage(tab.id, {
-                type: "SETTING_CHANGED",
-                setting: setting,
-                value: newValue,
-            }).catch(() => {
-                // Tab may not have the content script (e.g. about:blank) — ignore.
-            });
-        }
+// ── Numeric input interactions ────────────────────────────────────────────────
+for (const setting of ["videoPrebufferSeconds", "videoTargetFps", "videoMaxInFlight", "frameCompressionLevel"]) {
+    $(`input-${setting}`).addEventListener("change", async () => {
+        const newValue = parseFloat($(`input-${setting}`).value);
+        if (isNaN(newValue)) return;
+        await browser.storage.sync.set({ [setting]: newValue });
+        broadcast(setting, newValue);
     });
 }
 
@@ -68,12 +78,26 @@ $("openOptions").addEventListener("click", e => {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function applyToggleUI(id, value) {
     const btn = $(`toggle-${id}`);
-    btn.setAttribute("aria-checked", String(value));
+    if (btn) btn.setAttribute("aria-checked", String(value));
 }
 
 function applySelectUI(id, value) {
-    const selectElement = $(`select-${id}`);
-    if (selectElement) {
-        selectElement.value = value;
+    const el = $(`select-${id}`);
+    if (el) el.value = value;
+}
+
+function applyNumericUI(id, value) {
+    const el = $(`input-${id}`);
+    if (el) el.value = value;
+}
+
+async function broadcast(setting, value) {
+    const tabs = await browser.tabs.query({});
+    for (const tab of tabs) {
+        browser.tabs.sendMessage(tab.id, {
+            type:    "SETTING_CHANGED",
+            setting: setting,
+            value:   value,
+        }).catch(() => {});
     }
 }
