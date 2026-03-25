@@ -46,7 +46,6 @@ class VideoPipeline {
         this._buildDom(source);
 
         // VideoCapture: extracts frames from the hidden source.
-        // onFrame now receives (frameNum, captureTime, bytes).
         this._capture = new VideoCapture(
             source,
             (frameNum, captureTime, stepping, bytes) => {

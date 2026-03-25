@@ -48,9 +48,8 @@ class VideoRenderer {
         this._state  = RendererState.IDLE;
         this._seekId = 0;
 
-        // frameNum → { bitmap: ImageBitmap, captureTime: number }
-        this._buffer    = new Map();
-        this._nextFrame = 0; // lowest frameNum not yet displayed
+        // frameNum → { bitmap: ImageBitmap, captureTime: number, stepping: boolean }
+        this._buffer = new Map();
 
         this._rafHandle = null;
 
@@ -137,10 +136,8 @@ class VideoRenderer {
             // We use the explicit `stepping` flag — no threshold heuristics.
             if (isStepping && this._clockSync) {
                 const videoT = ct / 1000;
-                const oldCt  = ct;
                 ct = this._clockSync.perfNow +
                      (videoT - this._clockSync.videoTime) * 1000;
-                console.log(`[VC:recv]  late stepping frame ${frameNum}: ct ${oldCt.toFixed(1)}ms (videoT=${videoT.toFixed(3)}s) → ${ct.toFixed(1)}ms`);
             }
 
             this._buffer.set(frameNum, { bitmap, captureTime: ct, stepping: isStepping });
@@ -156,7 +153,6 @@ class VideoRenderer {
     /** Called by VideoPipeline on a user-initiated seek. */
     onSeeked() {
         this._seekId++;
-        this._nextFrame = 0;
         this._captureTimeMap.clear();
         this._clockSync = null;
         for (const [, { bitmap }] of this._buffer) bitmap.close();
@@ -208,11 +204,9 @@ class VideoRenderer {
         this._state = RendererState.BUFFERING;
         this._clockSync = null;
         this._stopPlaybackLoop();
-        console.log(`[VC:state] → BUFFERING  videoTime=${this._source.currentTime.toFixed(3)}s  bufSize=${this._buffer.size}  prebufferOrigin=${this._prebufferOrigin?.toFixed(3) ?? 'null'}s`);
+        console.log(`[VideoCensor] → BUFFERING  videoTime=${this._source.currentTime.toFixed(3)}s`);
 
-        const fps  = VIDEO_FPS_TARGET;
-        const secs = (typeof videoPrebufferSeconds !== "undefined") ? videoPrebufferSeconds : 3;
-        this._prebufferFrames = Math.ceil(fps * secs);
+        this._prebufferFrames = Math.ceil(VIDEO_FPS_TARGET * videoPrebufferSeconds);
 
         // Record where we are so we can snap back when PLAYING starts.
         this._prebufferOrigin = this._source.currentTime;
@@ -252,7 +246,7 @@ class VideoRenderer {
 
     _enterPlaying() {
         this._state = RendererState.PLAYING;
-        console.log(`[VC:state] → PLAYING  videoTime=${this._source.currentTime.toFixed(3)}s  bufSize=${this._buffer.size}  prebufferOrigin=${this._prebufferOrigin?.toFixed(3) ?? 'null'}s`);
+        console.log(`[VideoCensor] → PLAYING  videoTime=${this._source.currentTime.toFixed(3)}s`);
 
         // Mark internalPlayback now and keep it true across the entire
         // pause → snap-back seek → play sequence. It is only cleared once
@@ -310,48 +304,27 @@ class VideoRenderer {
      * (currentTime * 1000) into performance.now() space so all frames
      * share a single comparable timeline before _tick() runs.
      *
-     * Stepping-mode frames have captureTime = source.currentTime * 1000,
-     * which is a small number (seconds-into-video * 1000).
-     * Playing-mode frames have captureTime = performance.now(), a large
-     * number (ms since page load).
-     * Without normalisation these two sets are never directly comparable.
+     * All captureTime values are stored as currentTime * 1000 at capture time.
+     * A stepping frame at video position T seconds gets:
+     *   newCaptureTime = perfNow + (T - videoTime) * 1000
+     * which places it correctly relative to the current playback position on
+     * the perf timeline. Future frames (T > videoTime) get a future perf time;
+     * past frames (T < videoTime) get a past perf time.
      */
     _establishClockSync() {
         const perfNow   = performance.now();
         const videoTime = this._source.currentTime;
         this._clockSync = { perfNow, videoTime };
-        console.log(`[VC:sync]  clockSync set  perfNow=${perfNow.toFixed(1)}ms  videoTime=${videoTime.toFixed(3)}s`);
+        console.log(`[VideoCensor] clockSync set  perfNow=${perfNow.toFixed(1)}ms  videoTime=${videoTime.toFixed(3)}s`);
 
-        // Convert stepping-mode captureTime values to performance.now() space.
-        // A stepping frame captured at video position T seconds was stored as
-        // T * 1000.  Its equivalent perf time is:
-        //   perfNow + (T - videoTime) * 1000
-        // which places it relative to the current playback position on the
-        // perf timeline.  Future frames (T > videoTime) get a future perf time;
-        // past frames (T < videoTime) get a past perf time — both correct.
-        //
-        // We use the explicit entry.stepping flag written at capture time to
-        // identify frames in video-time space. This is reliable regardless of
-        // when in the page's lifetime the session starts.
-        // Rewrite stepping-mode frames from video-time space into perf space.
-        // We use the explicit entry.stepping flag set at capture time — no
-        // threshold heuristics that break when page load time and video time
-        // happen to overlap (e.g. early in a session).
-        let rewriteCount = 0;
-        for (const [frameNum, entry] of this._buffer) {
+        // Rewrite any stepping-mode frames already in the buffer from video-time
+        // space (currentTime * 1000) into performance.now() space so all frames
+        // share a single comparable timeline before _tick() runs.
+        for (const [, entry] of this._buffer) {
             if (entry.stepping) {
-                const videoT  = entry.captureTime / 1000;
-                const oldCt   = entry.captureTime;
+                const videoT      = entry.captureTime / 1000;
                 entry.captureTime = perfNow + (videoT - videoTime) * 1000;
-                entry.stepping    = false; // now in perf space, treat as playing
-                rewriteCount++;
-                console.log(`[VC:sync]  rewrite frame ${frameNum}: ct ${oldCt.toFixed(1)}ms (videoT=${videoT.toFixed(3)}s) → ${entry.captureTime.toFixed(1)}ms`);
-            }
-        }
-        if (rewriteCount === 0) {
-            console.log(`[VC:sync]  no stepping frames to rewrite (bufSize=${this._buffer.size})`);
-            for (const [frameNum, entry] of this._buffer) {
-                console.log(`[VC:sync]    frame ${frameNum}: ct=${entry.captureTime.toFixed(1)}ms  stepping=${entry.stepping}`);
+                entry.stepping    = false;
             }
         }
     }
@@ -375,16 +348,12 @@ class VideoRenderer {
             this._rafHandle = null;
             if (this._state !== RendererState.PLAYING) return;
 
-            // Convert source.currentTime to the performance.now() timeline using
-            // the sync point established when playback started. This lets us
-            // compare directly against captureTime, which is performance.now()-
-            // based in playing mode and source.currentTime*1000-based in stepping
-            // mode. If no sync point exists yet, fall back to a raw ms conversion.
-            const videoTimeMs = this._source.currentTime * 1000;
-            const now = this._clockSync
-                ? this._clockSync.perfNow +
-                  (this._source.currentTime - this._clockSync.videoTime) * 1000
-                : videoTimeMs;
+            // Map source.currentTime into the performance.now() timeline using
+            // the sync point established when playback started. All captureTime
+            // values in the buffer have already been rewritten into this same
+            // perf space by _establishClockSync, so the comparison is valid.
+            const now = this._clockSync.perfNow +
+                (this._source.currentTime - this._clockSync.videoTime) * 1000;
 
             // Find the best frame to display: among all frames whose captureTime
             // is <= now (i.e. due to be shown), pick the one closest to 'now'
@@ -394,7 +363,7 @@ class VideoRenderer {
 
             for (const [frameNum, { captureTime }] of this._buffer) {
                 if (captureTime <= now) {
-                    // FIX: Maximize captureTime first. Only fallback to frameNum for exact ties.
+                    // Maximise captureTime first; only use frameNum to break exact ties.
                     if (bestFrameNum === null ||
                         captureTime > bestCaptureTime ||
                         (captureTime === bestCaptureTime && frameNum > bestFrameNum)) {
@@ -413,13 +382,10 @@ class VideoRenderer {
                 for (const [frameNum, { bitmap, captureTime }] of this._buffer) {
                     if (captureTime < bestCaptureTime ||
                         (captureTime === bestCaptureTime && frameNum < bestFrameNum)) {
-                        console.log(`[VC:tick]  DISCARD frame ${frameNum}: ct=${captureTime.toFixed(1)} < bestCt=${bestCaptureTime.toFixed(1)}  now=${now.toFixed(1)}`);
                         bitmap.close();
                         this._buffer.delete(frameNum);
                     }
                 }
-
-                console.log(`[VC:tick]  DRAW frame ${bestFrameNum}: ct=${bestCaptureTime.toFixed(1)}  now=${now.toFixed(1)}  clockSync=${this._clockSync ? 'yes' : 'NO'}  videoTime=${this._source.currentTime.toFixed(3)}s  bufRemaining=${this._buffer.size - 1}`);
 
                 // Draw the chosen frame.
                 const { bitmap } = this._buffer.get(bestFrameNum);
@@ -430,23 +396,18 @@ class VideoRenderer {
                 this._ctx.drawImage(bitmap, 0, 0);
                 bitmap.close();
                 this._buffer.delete(bestFrameNum);
-                this._nextFrame = bestFrameNum + 1;
             } else {
                 // No frame is ready for the current playback position.
                 // Check whether we have any future frames at all.
                 if (this._buffer.size === 0) {
                     // Completely empty — starvation.
-                    // _prebufferOrigin must be in seconds (source.currentTime
-                    // space) — not in ms / performance.now() space.
                     this._prebufferOrigin = this._source.currentTime;
-                    console.log(`[VC:tick]  STARVATION  videoTime=${this._source.currentTime.toFixed(3)}s  now=${now.toFixed(1)}  clockSync=${this._clockSync ? 'yes' : 'NO'}`);
+                    console.warn(`[VideoCensor] buffer starvation at ${this._source.currentTime.toFixed(3)}s`);
                     this._enterBuffering();
                     return;
                 }
-                // Frames exist but are all in the future — wait for source to
-                // catch up (this can happen briefly after a snap-back seek).
-                const futureCts = [...this._buffer.values()].map(e => e.captureTime.toFixed(1)).join(', ');
-                console.log(`[VC:tick]  WAIT (all future)  now=${now.toFixed(1)}  bufSize=${this._buffer.size}  captureTimes=[${futureCts}]  clockSync=${this._clockSync ? 'yes' : 'NO'}`);
+                // Frames exist but are all in the future — wait for the source
+                // to catch up (can happen briefly after a snap-back seek).
             }
 
             this._tick();

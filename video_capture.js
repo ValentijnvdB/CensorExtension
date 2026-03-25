@@ -18,15 +18,17 @@
  * isStepping is a public flag read by VideoPipeline._onSeeked() to suppress
  * buffer flushes triggered by our own internal seeks.
  *
- * Emits: onFrame(frameNum: number, captureTime: number, bytes: ArrayBuffer)
- *   captureTime is source.currentTime at the moment of capture, used by the
- *   renderer to display frames in sync with the audio clock.
+ * Emits: onFrame(frameNum: number, captureTime: number, stepping: boolean, bytes: ArrayBuffer)
+ *   captureTime is source.currentTime * 1000 at the moment of capture.
+ *   stepping mirrors isStepping at capture time; the renderer uses it to
+ *   identify frames whose captureTime is in video-time space (currentTime*1000)
+ *   so it can rewrite them into performance.now() space at clock-sync time.
  */
 
 class VideoCapture {
     /**
      * @param {HTMLVideoElement} sourceVideo
-     * @param {function(frameNum, captureTime, stepping, bytes)} onFrame
+     * @param {function(frameNum: number, captureTime: number, stepping: boolean, bytes: ArrayBuffer)} onFrame
      * @param {function(): boolean} isBufferFull
      *   Returns true when the renderer's buffer has enough frames and capture
      *   should stop stepping. Only consulted in stepping mode — in playing mode
@@ -271,32 +273,8 @@ class VideoCapture {
         const v = this._source;
         if (!v.videoWidth) return;
 
-        // Record captureTime before any async work so it matches this exact frame.
-        //
-        // In PLAYING mode we use performance.now() (milliseconds) because
-        // source.currentTime only updates at the video's native frame rate and
-        // can repeat across multiple capture ticks at VIDEO_FPS_TARGET, making
-        // ordering ambiguous. performance.now() is strictly monotonic with
-        // sub-millisecond resolution, so every frame in playing mode gets a
-        // unique, correctly-ordered timestamp.
-        //
-        // In STEPPING mode we use source.currentTime (seconds → ms) because
-        // the seek-step loop explicitly sets currentTime to known positions —
-        // that IS the meaningful ordering key, and performance.now() would
-        // just reflect wall-clock dispatch order which could differ if seeks
-        // resolve out of order.
-        // In PLAYING mode, use performance.now() — strictly monotonic, sub-ms
-        // resolution, guaranteed unique across capture ticks.
-        // In STEPPING mode, use source.currentTime * 1000 — the seek-step loop
-        // controls exactly which position is captured, so video time is the
-        // correct ordering key. performance.now() here would reflect wall-clock
-        // dispatch order, which can differ from seek order if seeks resolve
-        // out of order.
-        // We pass `stepping` alongside captureTime so the renderer can
-        // reliably identify which timeline a frame belongs to — no heuristics.
-        const stepping    = this._stepping;
         const captureTime = v.currentTime * 1000;
-        const frameNum = this._frameNum++;
+        const frameNum    = this._frameNum++;
         this._lastVideoTime = v.currentTime;
 
         this._inFlightCount++;
