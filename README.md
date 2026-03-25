@@ -1,6 +1,6 @@
 # Censor Extension for CensorTool
 
-This is a browser extension that automatically scans and censor images on the web. 
+This is a browser extension that automatically scans and censor images (and videos*) on the web. 
 It was created to use with [CensorTool](https://github.com/ValentijnvdB/CensorTool).
 
 It was created and tested for Firefox and Firefox-derived browsers. Chrome support is planned. 
@@ -21,5 +21,16 @@ However, the endpoints are configurable, so in principle it could be used with o
 
 ## Planned
 - [ ] Chrome support
-- [ ] GIF support
-- [ ] Video support? (Not sure if possible at all & at reasonable performance)
+- [x] ~~GIF support~~ added in v0.1
+- [x] ~~Video support? (Not sure if possible at all & at reasonable performance)~~ Limited video support added in v0.1
+
+
+## Censor videos
+
+With version v0.1, you can now censor videos in real-time. 
+Not all websites are supported, because of how videos are streamed on them.
+You need the latest version of the CensorTool and a decent computer that can keep up.
+
+It does not always work perfectly. Sometimes, it freezes or shows a few frames out of order. 
+Moving the video back or forward a few seconds fixes this most of the time.
+Additionally, the progress bar is stays at 0, however skipping forwards still works.
