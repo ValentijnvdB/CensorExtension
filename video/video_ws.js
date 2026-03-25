@@ -1,7 +1,7 @@
 /**
  * video_ws.js – Shared WebSocket connection for video censoring
  *
- * Manages a single WebSocket connection to wss://localhost:8443/censor_video
+ * Manages a single WebSocket connection to wss://localhost:8443/censor_frame
  * shared across all videos on the page. Routes incoming frames back to the
  * correct VideoRenderer by videoId.
  *
@@ -22,7 +22,7 @@
  *   on cancel, so frames that haven't left the browser yet never reach the wire.
  */
 
-const VIDEO_WS_URL = "wss://localhost:8443/censor_video";
+const VIDEO_WS_URL = "wss://localhost:8443/censor_frame";
 
 const MSG_TYPE_FRAME  = 0;
 const MSG_TYPE_CANCEL = 1;
