@@ -12,10 +12,9 @@
       <span class="version" id="version"></span>
     </header>
 
+    <!-- Master switch — always visible -->
     <div class="section-label">Master switch</div>
-
-    <div class="settings-list">
-
+    <div class="settings-list master-list">
       <div class="setting-row" id="row-extensionEnabled">
         <div class="setting-info">
           <span class="setting-name">Enable Censoring</span>
@@ -25,45 +24,113 @@
           <span class="thumb"></span>
         </button>
       </div>
-
     </div>
 
-    <div class="section-label">Quick Settings</div>
+    <!-- Tab bar -->
+    <div class="tab-bar">
+      <button class="tab-btn active" data-tab="quick">Quick</button>
+      <button class="tab-btn" data-tab="video">Video</button>
+    </div>
 
-    <div class="settings-list">
+    <!-- Quick tab -->
+    <div class="tab-panel" id="tab-quick">
+      <div class="settings-list">
 
-      <div class="setting-row" id="row-removeGifs">
-        <div class="setting-info">
-          <span class="setting-name">Remove GIFs</span>
-          <span class="setting-desc">Replace animated GIFs with a static placeholder</span>
+        <div class="setting-row" id="row-gifBehavior">
+          <div class="setting-info">
+            <span class="setting-name">GIF behavior</span>
+            <span class="setting-desc">How to handle animated GIFs on the page</span>
+          </div>
+          <select id="select-gifBehavior">
+            <option value="nothing">Nothing</option>
+            <option value="remove">Remove</option>
+            <option value="censor">Censor</option>
+          </select>
         </div>
-        <button class="toggle" id="toggle-removeGifs" role="switch" aria-checked="false">
-          <span class="thumb"></span>
-        </button>
+
+        <div class="setting-row" id="row-videoBehavior">
+          <div class="setting-info">
+            <span class="setting-name">Video behavior</span>
+            <span class="setting-desc">How to handle embedded videos on the page</span>
+          </div>
+          <select id="select-videoBehavior">
+            <option value="nothing">Nothing</option>
+            <option value="remove">Remove</option>
+            <option value="censor">Censor</option>
+          </select>
+        </div>
+
+        <div class="setting-row" id="row-loadBehavior">
+          <div class="setting-info">
+            <span class="setting-name">Load behavior</span>
+            <span class="setting-desc">What to show while waiting for the censored version</span>
+          </div>
+          <select id="select-loadBehavior">
+            <option value="placeholder">Placeholder</option>
+            <option value="blur">Blur</option>
+            <option value="pixelate">Pixelate</option>
+          </select>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Video tab -->
+    <div class="tab-panel hidden" id="tab-video">
+      <div class="settings-list">
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Buffer length</span>
+            <span class="setting-desc">Seconds of frames to buffer before playback starts</span>
+          </div>
+          <input class="num-input" type="number" id="input-videoPrebufferSeconds" min="0" max="60" step="1" />
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Target FPS</span>
+            <span class="setting-desc">Frames per second sent to the backend — lower if it can't keep up</span>
+          </div>
+          <input class="num-input" type="number" id="input-videoTargetFps" min="1" max="60" step="1" />
+        </div>
+
       </div>
 
-      <div class="setting-row" id="row-removeVideos">
-        <div class="setting-info">
-          <span class="setting-name">Remove Videos</span>
-          <span class="setting-desc">Replace embedded videos with a static placeholder</span>
-        </div>
-        <button class="toggle" id="toggle-removeVideos" role="switch" aria-checked="false">
-          <span class="thumb"></span>
-        </button>
-      </div>
+      <!-- Advanced spoiler -->
+      <details class="advanced-spoiler">
+        <summary>Advanced</summary>
+        <div class="settings-list" style="margin-top: 8px;">
 
-      <div class="setting-row" id="row-loadBehavior">
-        <div class="setting-info">
-          <span class="setting-name">Load behavior</span>
-          <span class="setting-desc">What should happen with the image while waiting for the censored version</span>
-        </div>
-        <select id="select-loadBehavior">
-          <option value="placeholder">Placeholder</option>
-          <option value="blur">Blur</option>
-          <option value="pixelate">Pixelate</option>
-        </select>
-      </div>
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-name">Max in-flight</span>
+              <span class="setting-desc">Max unacknowledged frames in flight to the server</span>
+            </div>
+            <input class="num-input" type="number" id="input-videoMaxInFlight" min="1" max="512" step="1" />
+          </div>
 
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-name">Frame format</span>
+              <span class="setting-desc">Image encoding format for captured frames</span>
+            </div>
+            <select id="select-videoFrameFormat">
+              <option value="jpeg">JPEG</option>
+              <option value="webp">WebP</option>
+            </select>
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-info">
+              <span class="setting-name">Compression quality</span>
+              <span class="setting-desc">Encoding quality (0 = smallest, 1 = best)</span>
+            </div>
+            <input class="num-input" type="number" id="input-frameCompressionLevel" min="0" max="1" step="0.05" />
+          </div>
+
+        </div>
+      </details>
     </div>
 
     <a class="settings-link" id="openOptions">

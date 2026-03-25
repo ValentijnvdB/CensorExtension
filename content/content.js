@@ -21,9 +21,21 @@ Promise.all([
     };
 
     settings.extensionEnabled = stored.extensionEnabled;
-    settings.removeGifs   = stored.removeGifs;
-    settings.removeVideos = stored.removeVideos;
-    settings.loadBehavior  = stored.loadBehavior;
+    settings.loadBehavior     = stored.loadBehavior;
+    settings.gifBehavior      = stored.gifBehavior;
+    settings.videoBehavior    = stored.videoBehavior;
+
+    // Bool aliases used by gifs.js / videos.js.
+    settings.removeGifs   = stored.gifBehavior   === 'remove';
+    settings.removeVideos = stored.videoBehavior === 'remove';
+    settings.censorVideos = stored.videoBehavior === 'censor';
+
+    // Video pipeline config.
+    videoPrebufferSeconds = stored.videoPrebufferSeconds;
+    videoTargetFps        = stored.videoTargetFps;
+    videoMaxInFlight      = stored.videoMaxInFlight;
+    videoFrameFormat      = stored.videoFrameFormat;
+    frameCompressionLevel = stored.frameCompressionLevel;
 
     compileFilters(filters);
 
@@ -42,23 +54,33 @@ browser.runtime.onMessage.addListener((msg) => {
 
     if (msg.setting === "extensionEnabled") {
         settings.extensionEnabled = msg.value;
-        processAllImages()
+        processAllImages();
     }
 
-    if (msg.setting === "removeGifs") {
-        settings.removeGifs = msg.value;
+    if (msg.setting === "gifBehavior") {
+        settings.gifBehavior = msg.value;
+        settings.removeGifs  = (msg.value === 'remove');
         applyGifSetting();
     }
 
-    if (msg.setting === "removeVideos") {
-        settings.removeVideos = msg.value;
+    if (msg.setting === "videoBehavior") {
+        settings.videoBehavior = msg.value;
+        settings.removeVideos  = (msg.value === 'remove');
+        settings.censorVideos  = (msg.value === 'censor');
         applyVideoSetting();
+        applyCensorVideoSetting();
     }
 
     if (msg.setting === "loadBehavior") {
         settings.loadBehavior = msg.value;
     }
 
+    // Video pipeline config
+    if (msg.setting === "videoPrebufferSeconds") videoPrebufferSeconds = msg.value;
+    if (msg.setting === "videoTargetFps")        videoTargetFps        = msg.value;
+    if (msg.setting === "videoMaxInFlight")      videoMaxInFlight      = msg.value;
+    if (msg.setting === "videoFrameFormat")      videoFrameFormat      = msg.value;
+    if (msg.setting === "frameCompressionLevel") frameCompressionLevel = msg.value;
 });
 
 // ── DOM observation ───────────────────────────────────────────────────────────
@@ -67,6 +89,7 @@ function processAllImages() {
     if (settings.extensionEnabled) {
         document.querySelectorAll("img").forEach(enqueueImage);
         document.querySelectorAll("video").forEach(replaceVideoIfNeeded);
+        document.querySelectorAll("video").forEach(censorVideoIfNeeded);
     }
 }
 
@@ -79,6 +102,7 @@ const observer = new MutationObserver((mutations) => {
                     enqueueImage(node);
                 } else if (node.tagName === "VIDEO") {
                     replaceVideoIfNeeded(node);
+                    censorVideoIfNeeded(node);
                 } else {
                     node.querySelectorAll?.("img").forEach(enqueueImage);
                     node.querySelectorAll?.("video").forEach(replaceVideoIfNeeded);
@@ -111,4 +135,3 @@ if (document.readyState === "loading") {
 } else {
     init();
 }
-
