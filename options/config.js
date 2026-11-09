@@ -271,7 +271,7 @@ function buildConfigFields(container, cfg, onChange, clipLabels = profileLabels(
 
   const overlayStickerWrap = makeSubWrap("overlay-sticker-wrap");
   overlayStickerWrap.appendChild(makeFloat(`overlay_probability_sticker-${pfx}`, "Probability", cfg.overlay_probability, 0, 1, set("overlay_probability")));
-  overlayStickerWrap.appendChild(makeText(`overlay_categories-${pfx}`, "Categories", cfg.overlay_categories, set("overlay_categories")));
+  overlayStickerWrap.appendChild(makeStickerField(`overlay_stickers-${pfx}`, cfg, onChange));
   container.appendChild(overlayStickerWrap);
 
   // Advanced spoiler

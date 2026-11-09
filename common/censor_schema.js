@@ -35,7 +35,7 @@ const BOX_DEFAULTS = {
   overlay_color:       "#ffffff",
   overlay_thickness:   1,
   overlay_font_scale:  1.0,
-  overlay_categories:  "",
+  overlay_stickers:    [],   // folders and/or single images, relative to stickers_dir; [] = all
   inverse:             false,
   clip_to:             [],
 };
@@ -116,7 +116,7 @@ function toBackendBox(flat) {
     sticker: {
       type:        "sticker",
       probability: f.overlay_probability,
-      categories:  parseList(f.overlay_categories),
+      stickers:    [...(f.overlay_stickers ?? [])],
     },
   };
 
@@ -171,8 +171,13 @@ function fromBackendBox(box) {
       if (ov.color      !== undefined) flat.overlay_color      = rgbToHex(ov.color);
       if (ov.thickness  !== undefined) flat.overlay_thickness  = ov.thickness;
       if (ov.font_scale !== undefined) flat.overlay_font_scale = ov.font_scale;
-    } else if (ov.categories !== undefined) {
-      flat.overlay_categories = joinList(ov.categories);
+    } else {
+      // `categories` is the deprecated form of `stickers`
+      const entries = [
+        ...(Array.isArray(ov.stickers)   ? ov.stickers   : []),
+        ...(Array.isArray(ov.categories) ? ov.categories : []),
+      ].map(String);
+      flat.overlay_stickers = [...new Set(entries)];
     }
   }
 

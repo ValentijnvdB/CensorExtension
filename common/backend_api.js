@@ -91,3 +91,22 @@ function groupLabelsByModel(profile) {
       Object.keys(groups).sort().map(m => [m, groups[m].sort()])
   );
 }
+
+/**
+ * GET /stickers[?dir=<stickersDir>] → {
+ *   stickersDir: string,
+ *   categories:  string[],                       // folders, relative to stickersDir
+ *   stickers:    [{ path, url }],                // path relative to stickersDir,
+ * }                                              // url absolute
+ */
+async function fetchStickers(baseUrl, stickersDir) {
+  const query = stickersDir ? `?dir=${encodeURIComponent(stickersDir)}` : "";
+  const data  = await fetchJson(`${baseUrl}/stickers${query}`);
+  return {
+    stickersDir: data.stickers_dir ?? stickersDir ?? "",
+    categories:  Array.isArray(data.categories) ? data.categories : [],
+    stickers:    (Array.isArray(data.stickers) ? data.stickers : [])
+        .filter(s => s && typeof s.path === "string")
+        .map(s => ({ path: s.path, url: `${baseUrl}${s.url ?? `/stickers/${s.path}`}` })),
+  };
+}

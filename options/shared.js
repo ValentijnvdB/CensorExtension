@@ -161,7 +161,9 @@ async function refreshBackend() {
   buildConfigTab();
 }
 
-loadState().then(async () => {
+// Wait for the other scripts of the page (connection.js, config.js, ...).
+document.addEventListener("DOMContentLoaded", async () => {
+  await loadState();
   initConnectionTab();
   await refreshBackend();
 });
