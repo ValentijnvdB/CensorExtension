@@ -1,60 +1,4 @@
-// ── Feature definitions ───────────────────────────────────────────────────────
-const FEATURES = [
-  "FACE_FEMALE",
-  "FEMALE_BREAST_EXPOSED",
-  "FEMALE_GENITALIA_EXPOSED",
-  "ANUS_EXPOSED",
-  "BUTTOCKS_EXPOSED",
-  "FEET_EXPOSED",
-  "BELLY_EXPOSED",
-  "FEMALE_BREAST_COVERED",
-  "FEMALE_GENITALIA_COVERED",
-  "BELLY_COVERED",
-  "FEET_COVERED",
-  "ARMPITS_COVERED",
-  "BUTTOCKS_COVERED",
-  "FACE_MALE",
-  "MALE_BREAST_EXPOSED",
-  "MALE_GENITALIA_EXPOSED",
-  "ARMPITS_EXPOSED",
-  "ANUS_COVERED",
-];
-
-// ── General (global, non-feature) settings ────────────────────────────────────
-const GENERAL_DEFAULTS = {
-  force_inverse_censor:         false,
-  inverse_censor_style:         "blur",
-  inverse_blur_strength:        31,
-  inverse_pixel_factor:         20,
-  inverse_bar_color:            "#000000",
-  enable_overlays:              true,
-  enable_watermark:             false,
-  merge_overlapping_censor_boxes: true,
-  merge_overlapping_borders:    true,
-};
-
-// ── Default config values ─────────────────────────────────────────────────────
-const CONFIG_DEFAULTS = {
-  censor_style:       "blur",
-  blur_strength:      31,
-  pixel_factor:       20,
-  bar_color:          "#000000",
-  overlay_prob:       0.5,
-  border:             false,
-  border_thickness:   2,
-  border_color:       "#ff0000",
-  inverse:            false,
-  intersect_human:    false,
-  shape:              "default",
-  min_prob:           0.5,
-  width_area_safety:  0.1,
-  height_area_safety: 0.1,
-  overlay_type:       "off",
-  overlay_values:     "",
-  overlay_color:      "#000000",
-  overlay_font_scale: 2.2,
-  overlay_categories: "",
-};
+// FEATURES, GENERAL_DEFAULTS and BOX_DEFAULTS come from common/censor_schema.js
 
 const CONNECTION_DEFAULTS = {
   baseUrl:      "https://localhost:8443",
@@ -70,14 +14,14 @@ const deepClone = obj => JSON.parse(JSON.stringify(obj));
 let state = {
   ...CONNECTION_DEFAULTS,
   general:  deepClone(GENERAL_DEFAULTS),
-  defaults: deepClone(CONFIG_DEFAULTS),
+  defaults: deepClone(BOX_DEFAULTS),
   features: {},
 };
 
 // ── Persistence ───────────────────────────────────────────────────────────────
 
 // Before saving, strip the `config` field from any feature that uses the
-// default — there's no point persisting a redundant copy of CONFIG_DEFAULTS
+// default — there's no point persisting a redundant copy of BOX_DEFAULTS
 // for every feature
 function serializeState() {
   const slim = {
@@ -113,7 +57,8 @@ async function loadState() {
   } catch { /* use defaults */ }
 
   // Ensure general settings are fully populated
-  state.general = { ...GENERAL_DEFAULTS, ...(state.general ?? {}) };
+  state.general  = { ...GENERAL_DEFAULTS, ...(state.general ?? {}) };
+  state.defaults = { ...deepClone(BOX_DEFAULTS), ...(state.defaults ?? {}) };
 
   // Ensure every known feature has a fully-populated entry in memory,
   // restoring the config field for useDefault features if it was stripped.
@@ -122,11 +67,13 @@ async function loadState() {
       state.features[f] = {
         enabled:    true,
         useDefault: true,
-        config:     deepClone(CONFIG_DEFAULTS),
+        config:     deepClone(BOX_DEFAULTS),
       };
     } else if (state.features[f].useDefault && !state.features[f].config) {
       // Re-hydrate stripped config so the rest of the UI works normally.
-      state.features[f].config = deepClone(CONFIG_DEFAULTS);
+      state.features[f].config = deepClone(BOX_DEFAULTS);
+    } else {
+      state.features[f].config = { ...deepClone(BOX_DEFAULTS), ...state.features[f].config };
     }
   }
 }

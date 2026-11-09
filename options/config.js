@@ -1,5 +1,6 @@
 // ── Config tab ────────────────────────────────────────────────────────────────
-// Depends on: shared.js (state, FEATURES, CONFIG_DEFAULTS, $, deepClone, saveState)
+// Depends on: censor_schema.js (FEATURES, CENSOR_STYLES, SHAPES, ...)
+//             shared.js (state, $, deepClone, saveState)
 
 
 async function resetCache() {
@@ -135,6 +136,54 @@ function makeText(id, labelText, value, onChange) {
   return wrap;
 }
 
+function makeNote(text) {
+  const p = document.createElement("p");
+  p.className = "field-desc field-note";
+  p.textContent = text;
+  return p;
+}
+
+function makeSpoiler(labelText) {
+  const spoiler = document.createElement("details");
+  spoiler.className = "spoiler";
+  const summary = document.createElement("summary");
+  summary.className = "spoiler-label";
+  summary.textContent = labelText;
+  spoiler.appendChild(summary);
+  return spoiler;
+}
+
+/** A list of checkboxes; onChange receives the selected options as an array. */
+function makeMultiCheck(id, labelText, options, selected, onChange) {
+  const wrap = document.createElement("div");
+  wrap.className = "field field-multi";
+  const lbl = document.createElement("span");
+  lbl.className = "toggle-label";
+  lbl.textContent = labelText;
+  wrap.appendChild(lbl);
+
+  const list = document.createElement("div");
+  list.className = "multi-check";
+  const chosen = new Set(selected ?? []);
+  options.forEach((opt, i) => {
+    const row = document.createElement("label");
+    row.className = "multi-check-item";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.id = `${id}-${i}`;
+    cb.checked = chosen.has(opt);
+    cb.addEventListener("change", () => {
+      cb.checked ? chosen.add(opt) : chosen.delete(opt);
+      onChange(options.filter(o => chosen.has(o)));
+    });
+    row.appendChild(cb);
+    row.appendChild(document.createTextNode(opt));
+    list.appendChild(row);
+  });
+  wrap.appendChild(list);
+  return wrap;
+}
+
 function buildToggleSwitch(id, checked, onChange) {
   const label = document.createElement("label");
   label.className = "toggle-switch";
@@ -156,116 +205,81 @@ function buildToggleSwitch(id, checked, onChange) {
 
 // ── Config fields renderer ────────────────────────────────────────────────────
 
-function buildConfigFields(container, cfg, onChange) {
+/**
+ * Renders the censor box fields for `cfg` (flat format, see censor_schema.js).
+ * `clipLabels` are the labels offered for clip_to.
+ */
+function buildConfigFields(container, cfg, onChange, clipLabels = FEATURES) {
   if (typeof container === "string") container = $(container);
   container.innerHTML = "";
   // Use a unique prefix per container to avoid duplicate IDs
   const pfx = container.id || Math.random().toString(36).slice(2);
+  const set = (key, refresh = false) => val => {
+    cfg[key] = val;
+    if (refresh) refreshConditionals(container, cfg);
+    onChange();
+  };
 
+  // Censor style
   container.appendChild(makeSelect(`censor_style-${pfx}`, "Censor style", cfg.censor_style,
-      ["blur", "pixel", "bar"], val => {
-        cfg.censor_style = val;
-        refreshConditionals(container, cfg);
-        onChange();
-      }
-  ));
+      CENSOR_STYLES, set("censor_style", true)));
 
   const blurWrap = makeSubWrap("blur-wrap");
-  blurWrap.appendChild(makeInt(`blur_strength-${pfx}`, "Blur strength", cfg.blur_strength, val => {
-    cfg.blur_strength = val; onChange();
-  }));
+  blurWrap.appendChild(makeInt(`blur_strength-${pfx}`, "Blur strength", cfg.blur_strength, set("blur_strength")));
   container.appendChild(blurWrap);
 
   const pixelWrap = makeSubWrap("pixel-wrap");
-  pixelWrap.appendChild(makeInt(`pixel_factor-${pfx}`, "Pixel factor", cfg.pixel_factor, val => {
-    cfg.pixel_factor = val; onChange();
-  }));
+  pixelWrap.appendChild(makeInt(`pixel_factor-${pfx}`, "Pixel factor", cfg.pixel_factor, set("pixel_factor")));
   container.appendChild(pixelWrap);
 
   const barWrap = makeSubWrap("bar-wrap");
-  barWrap.appendChild(makeColor(`bar_color-${pfx}`, "Bar color", cfg.bar_color, val => {
-    cfg.bar_color = val; onChange();
-  }));
+  barWrap.appendChild(makeColor(`bar_color-${pfx}`, "Bar color", cfg.bar_color, set("bar_color")));
   container.appendChild(barWrap);
 
-  container.appendChild(makeToggle(`border-${pfx}`, "Border", cfg.border, val => {
-    cfg.border = val;
-    refreshConditionals(container, cfg);
-    onChange();
-  }));
+  const debugWrap = makeSubWrap("debug-wrap");
+  debugWrap.appendChild(makeColor(`debug_color-${pfx}`, "Debug color", cfg.debug_color, set("debug_color")));
+  container.appendChild(debugWrap);
+
+  const aiWrap = makeSubWrap("ai_remove-wrap");
+  aiWrap.appendChild(makeNote(
+      "Inpaints the area with ComfyUI. Requires a ComfyUI server configured on the backend. Slow."));
+  container.appendChild(aiWrap);
+
+  // Border
+  container.appendChild(makeToggle(`border-${pfx}`, "Border", cfg.border, set("border", true)));
 
   const borderWrap = makeSubWrap("border-sub-wrap");
-  borderWrap.appendChild(makeInt(`border_thickness-${pfx}`, "Border thickness", cfg.border_thickness, val => {
-    cfg.border_thickness = val; onChange();
-  }));
-  borderWrap.appendChild(makeColor(`border_color-${pfx}`, "Border color", cfg.border_color, val => {
-    cfg.border_color = val; onChange();
-  }));
+  borderWrap.appendChild(makeInt(`border_thickness-${pfx}`, "Border thickness", cfg.border_thickness, set("border_thickness")));
+  borderWrap.appendChild(makeColor(`border_color-${pfx}`, "Border color", cfg.border_color, set("border_color")));
   container.appendChild(borderWrap);
 
-  container.appendChild(makeToggle(`inverse-${pfx}`, "Inverse", cfg.inverse, val => {
-    cfg.inverse = val; onChange();
-  }));
+  container.appendChild(makeToggle(`inverse-${pfx}`, "Inverse", cfg.inverse, set("inverse")));
 
-  container.appendChild(makeSelect(`shape-${pfx}`, "Shape", cfg.shape,
-      ["default", "ellipse", "circle", "rectangle"], val => {
-        cfg.shape = val; onChange();
-      }
-  ));
+  container.appendChild(makeSelect(`shape-${pfx}`, "Shape", cfg.shape, SHAPES, set("shape")));
 
   // Overlay
   container.appendChild(makeSelect(`overlay_type-${pfx}`, "Overlay", cfg.overlay_type,
-      ["off", "text", "sticker"], val => {
-        cfg.overlay_type = val;
-        refreshConditionals(container, cfg);
-        onChange();
-      }
-  ));
+      OVERLAY_TYPES, set("overlay_type", true)));
 
   const overlayTextWrap = makeSubWrap("overlay-text-wrap");
-  overlayTextWrap.appendChild(makeFloat(`overlay_prob-${pfx}`, "Probability", cfg.overlay_prob, 0, 1, val => {
-    cfg.overlay_prob = val; onChange();
-  }));
-  overlayTextWrap.appendChild(makeText(`overlay_values-${pfx}`, "Values", cfg.overlay_values, val => {
-    cfg.overlay_values = val; onChange();
-  }));
-  overlayTextWrap.appendChild(makeColor(`overlay_color-${pfx}`, "Color", cfg.overlay_color, val => {
-    cfg.overlay_color = val; onChange();
-  }));
-  overlayTextWrap.appendChild(makeFloat(`overlay_font_scale-${pfx}`, "Font scale", cfg.overlay_font_scale, null, null, val => {
-    cfg.overlay_font_scale = val; onChange();
-  }));
+  overlayTextWrap.appendChild(makeFloat(`overlay_probability-${pfx}`, "Probability", cfg.overlay_probability, 0, 1, set("overlay_probability")));
+  overlayTextWrap.appendChild(makeText(`overlay_values-${pfx}`, "Values", cfg.overlay_values, set("overlay_values")));
+  overlayTextWrap.appendChild(makeColor(`overlay_color-${pfx}`, "Color", cfg.overlay_color, set("overlay_color")));
+  overlayTextWrap.appendChild(makeInt(`overlay_thickness-${pfx}`, "Thickness", cfg.overlay_thickness, set("overlay_thickness")));
+  overlayTextWrap.appendChild(makeFloat(`overlay_font_scale-${pfx}`, "Font scale", cfg.overlay_font_scale, null, null, set("overlay_font_scale")));
   container.appendChild(overlayTextWrap);
 
   const overlayStickerWrap = makeSubWrap("overlay-sticker-wrap");
-  overlayStickerWrap.appendChild(makeFloat(`overlay_prob_sticker-${pfx}`, "Probability", cfg.overlay_prob, 0, 1, val => {
-    cfg.overlay_prob = val; onChange();
-  }));
-  overlayStickerWrap.appendChild(makeText(`overlay_categories-${pfx}`, "Categories", cfg.overlay_categories, val => {
-    cfg.overlay_categories = val; onChange();
-  }));
+  overlayStickerWrap.appendChild(makeFloat(`overlay_probability_sticker-${pfx}`, "Probability", cfg.overlay_probability, 0, 1, set("overlay_probability")));
+  overlayStickerWrap.appendChild(makeText(`overlay_categories-${pfx}`, "Categories", cfg.overlay_categories, set("overlay_categories")));
   container.appendChild(overlayStickerWrap);
 
   // Advanced spoiler
-  const spoiler = document.createElement("details");
-  spoiler.className = "spoiler";
-  const summary = document.createElement("summary");
-  summary.className = "spoiler-label";
-  summary.textContent = "Advanced";
-  spoiler.appendChild(summary);
-
-  spoiler.appendChild(makeFloat(`min_prob-${pfx}`, "Min probability", cfg.min_prob, 0, 1, val => {
-    cfg.min_prob = val; onChange();
-  }));
-  spoiler.appendChild(makeFloat(`width_area_safety-${pfx}`, "Width area safety", cfg.width_area_safety, null, null, val => {
-    cfg.width_area_safety = val; onChange();
-  }));
-  spoiler.appendChild(makeFloat(`height_area_safety-${pfx}`, "Height area safety", cfg.height_area_safety, null, null, val => {
-    cfg.height_area_safety = val; onChange();
-  }));
-  spoiler.appendChild(makeToggle(`intersect_human-${pfx}`, "intersect_human", cfg.intersect_human, val => {
-    cfg.intersect_human = val; onChange();
-  }));
+  const spoiler = makeSpoiler("Advanced");
+  spoiler.appendChild(makeFloat(`min_probability-${pfx}`, "Min probability", cfg.min_probability, 0, 1, set("min_probability")));
+  spoiler.appendChild(makeFloat(`width_area_safety-${pfx}`, "Width area safety", cfg.width_area_safety, null, null, set("width_area_safety")));
+  spoiler.appendChild(makeFloat(`height_area_safety-${pfx}`, "Height area safety", cfg.height_area_safety, null, null, set("height_area_safety")));
+  spoiler.appendChild(makeMultiCheck(`clip_to-${pfx}`, "Clip to", clipLabels, cfg.clip_to, set("clip_to")));
   container.appendChild(spoiler);
 
   refreshConditionals(container, cfg);
@@ -279,6 +293,8 @@ function refreshConditionals(container, cfg) {
   show("blur-wrap",            cfg.censor_style === "blur");
   show("pixel-wrap",           cfg.censor_style === "pixel");
   show("bar-wrap",             cfg.censor_style === "bar");
+  show("debug-wrap",           cfg.censor_style === "debug");
+  show("ai_remove-wrap",       cfg.censor_style === "ai_remove");
   show("border-sub-wrap",      cfg.border === true);
   show("overlay-text-wrap",    cfg.overlay_type === "text");
   show("overlay-sticker-wrap", cfg.overlay_type === "sticker");
@@ -290,68 +306,43 @@ function buildGeneralSection() {
   const container = $("general-fields");
   container.innerHTML = "";
   const g = state.general;
-
-  // force_inverse_censor toggle
-  container.appendChild(makeToggle("gen-force-inverse", "Force inverse censor", g.force_inverse_censor, val => {
-    g.force_inverse_censor = val;
+  const set = (key, refresh = false) => val => {
+    g[key] = val;
+    if (refresh) refreshGeneralConditionals();
     saveState();
-  }));
+  };
+
+  container.appendChild(makeToggle("gen-force-inverse", "Force inverse censor", g.force_inverse_censor, set("force_inverse_censor")));
 
   // inverse_censor_style sub-section — always visible
   const inverseWrap = document.createElement("div");
   inverseWrap.id = "gen-inverse-sub";
 
   inverseWrap.appendChild(makeSelect("gen-inverse-style", "Inverse censor style", g.inverse_censor_style,
-      ["blur", "pixel", "bar"], val => {
-        g.inverse_censor_style = val;
-        refreshGeneralConditionals();
-        saveState();
-      }
-  ));
+      INVERSE_CENSOR_STYLES, set("inverse_censor_style", true)));
 
   const invBlurWrap = makeSubWrap("gen-inv-blur-wrap");
-  invBlurWrap.appendChild(makeInt("gen-inv-blur-strength", "Blur strength", g.inverse_blur_strength, val => {
-    g.inverse_blur_strength = val; saveState();
-  }));
+  invBlurWrap.appendChild(makeInt("gen-inv-blur-strength", "Blur strength", g.inverse_blur_strength, set("inverse_blur_strength")));
   inverseWrap.appendChild(invBlurWrap);
 
   const invPixelWrap = makeSubWrap("gen-inv-pixel-wrap");
-  invPixelWrap.appendChild(makeInt("gen-inv-pixel-factor", "Pixel factor", g.inverse_pixel_factor, val => {
-    g.inverse_pixel_factor = val; saveState();
-  }));
+  invPixelWrap.appendChild(makeInt("gen-inv-pixel-factor", "Pixel factor", g.inverse_pixel_factor, set("inverse_pixel_factor")));
   inverseWrap.appendChild(invPixelWrap);
 
   const invBarWrap = makeSubWrap("gen-inv-bar-wrap");
-  invBarWrap.appendChild(makeColor("gen-inv-bar-color", "Bar color", g.inverse_bar_color, val => {
-    g.inverse_bar_color = val; saveState();
-  }));
+  invBarWrap.appendChild(makeColor("gen-inv-bar-color", "Bar color", g.inverse_bar_color, set("inverse_bar_color")));
   inverseWrap.appendChild(invBarWrap);
 
   container.appendChild(inverseWrap);
 
-  // enable_overlays toggle
-  container.appendChild(makeToggle("gen-enable-overlays", "Enable overlays", g.enable_overlays, val => {
-    g.enable_overlays = val; saveState();
-  }));
+  container.appendChild(makeToggle("gen-enable-overlays", "Enable overlays", g.enable_overlays, set("enable_overlays")));
 
   // Advanced spoiler
-  const spoiler = document.createElement("details");
-  spoiler.className = "spoiler";
-  const summary = document.createElement("summary");
-  summary.className = "spoiler-label";
-  summary.textContent = "Advanced";
-  spoiler.appendChild(summary);
-
-  spoiler.appendChild(makeToggle("gen-enable-watermark", "Enable watermark", g.enable_watermark, val => {
-    g.enable_watermark = val; saveState();
-  }));
-  spoiler.appendChild(makeToggle("gen-merge-boxes", "Merge overlapping censor boxes", g.merge_overlapping_censor_boxes, val => {
-    g.merge_overlapping_censor_boxes = val; saveState();
-  }));
-  spoiler.appendChild(makeToggle("gen-merge-borders", "Merge overlapping borders", g.merge_overlapping_borders, val => {
-    g.merge_overlapping_borders = val; saveState();
-  }));
-
+  const spoiler = makeSpoiler("Advanced");
+  spoiler.appendChild(makeToggle("gen-enable-watermark", "Enable watermark", g.enable_watermark, set("enable_watermark")));
+  spoiler.appendChild(makeToggle("gen-merge-borders", "Merge overlapping borders", g.merge_overlapping_borders, set("merge_overlapping_borders")));
+  spoiler.appendChild(makeText("gen-stickers-dir", "Stickers dir", g.stickers_dir, set("stickers_dir")));
+  spoiler.appendChild(makeNote("Must be data/stickers or one of its subfolders on the server."));
   container.appendChild(spoiler);
 
   refreshGeneralConditionals();
