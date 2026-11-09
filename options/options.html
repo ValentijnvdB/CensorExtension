@@ -78,6 +78,23 @@
   <div class="tab-panel active" id="panel-config">
 
     <div class="card" style="margin-top:16px">
+      <p class="card-label">Backend profile</p>
+      <div class="profile-row">
+        <span class="profile-name" id="profileName">—</span>
+        <button class="btn-small" id="btnRefreshProfile">Refresh</button>
+      </div>
+      <div class="status-row">
+        <span class="dot" id="profileDot"></span>
+        <span class="status-text" id="profileStatus">not loaded</span>
+      </div>
+      <p class="field-desc" style="margin-top:16px">
+        Labels come from the models in the server's profile. Settings are saved per model;
+        anything without saved settings starts from the server's censor config.
+      </p>
+      <button class="btn-small" id="btnResetGeneral">Reset general &amp; defaults to server</button>
+    </div>
+
+    <div class="card" style="margin-top:16px">
       <p class="card-label">Config I/O</p>
       <p class="field-desc" style="margin-bottom:16px">Export the current config or import a previously exported one.</p>
       <div class="io-row">
@@ -106,9 +123,14 @@
       <div id="defaults-fields"></div>
     </div>
 
-    <div class="card" style="margin-top:16px">
-      <p class="card-label">Features</p>
-      <div id="feature-list"></div>
+    <div id="model-sections"></div>
+
+    <div class="card" id="inactive-card" style="margin-top:16px; display:none">
+      <p class="card-label">Inactive saved configs</p>
+      <p class="field-desc" style="margin-bottom:16px">
+        Settings of models that are not in the current profile. They can be imported into an active model.
+      </p>
+      <div id="inactive-list"></div>
     </div>
 
   </div>
@@ -135,6 +157,8 @@
 
 <!-- connection and config can load in either order after shared -->
 <script src="../common/censor_schema.js"></script>
+<script src="../common/backend_api.js"></script>
+<script src="../common/model_config.js"></script>
 <script src="shared.js"></script>
 <script src="connection.js"></script>
 <script src="config.js"></script>

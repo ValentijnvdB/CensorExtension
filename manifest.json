@@ -16,7 +16,11 @@
       "matches": ["<all_urls>"],
       "js": [
         "common/censor_schema.js",
+        "common/backend_api.js",
+        "common/model_config.js",
         "content/state.js",
+        "content/settings_reader.js",
+        "content/settings_cache.js",
         "content/dom-utils.js",
         "content/filters.js",
         "content/gifs.js",
@@ -27,9 +31,7 @@
         "video/videos.js",
         "content/load-behavior.js",
         "content/pipeline.js",
-        "content/content.js",
-        "content/settings_reader.js",
-        "content/settings_cache.js"
+        "content/content.js"
       ],
       "run_at": "document_start",
       "all_frames": true

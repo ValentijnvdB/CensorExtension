@@ -1,7 +1,7 @@
 /**
  * video_ws.js – Shared WebSocket connection for video censoring
  *
- * Manages a single WebSocket connection to wss://localhost:8443/censor_frame
+ * Manages a single WebSocket connection to <base URL>/censor_frame
  * shared across all videos on the page. Routes incoming frames back to the
  * correct VideoRenderer by videoId.
  *
@@ -20,6 +20,13 @@
  *
  * The client-side send queue is also purged of stale frames for the old seekId
  *   on cancel, so frames that haven't left the browser yet never reach the wire.
+ *
+ * Censor config (text message):
+ *   {"type": "config", "config": {...} | null}
+ *   Sent when the connection opens, before any frame, and again whenever the
+ *   settings change. null makes the server use its own censor config. The
+ *   server answers {"type": "config", "status": "success"} or
+ *   {"type": "error", "error": "..."}.
  */
 
 /** WebSocket URL derived from the configured base URL (http→ws, https→wss). */
@@ -36,6 +43,7 @@ const _videoWsHandlers = new Map();
 let _ws = null;
 let _wsReady = false;
 let _wsReconnectTimer = null;
+let _wsLastConfigJson = null;   // last config sent on the current connection
 
 // Each entry is { videoId, seekId, buffer } so we can purge stale frames.
 const _wsSendQueue = [];
@@ -131,14 +139,48 @@ function _wsPurgeQueue(videoId, seekId) {
     }
 }
 
+/**
+ * Sends the current censor config if it differs from the last one sent on
+ * this connection. Resending an identical config is avoided because the
+ * server then re-censors frames it could answer from memory.
+ */
+async function _wsSendConfig(ws) {
+    const config = await getCensorSettings();
+    const json   = JSON.stringify({ type: "config", config });
+    if (ws !== _ws || ws.readyState !== WebSocket.OPEN || json === _wsLastConfigJson) return;
+    ws.send(json);
+    _wsLastConfigJson = json;
+}
+
+onCensorSettingsChanged(() => {
+    if (_wsReady && _ws) _wsSendConfig(_ws);
+});
+
+function _handleWsText(text) {
+    let msg;
+    try { msg = JSON.parse(text); } catch {
+        console.warn("[VideoCensor] Received invalid text message, ignoring");
+        return;
+    }
+    if (msg.type === "error") {
+        console.warn("[VideoCensor] Server error:", msg.error);
+    }
+}
+
 function _videoWsEnsureConnected() {
     if (_ws && (_ws.readyState === WebSocket.OPEN || _ws.readyState === WebSocket.CONNECTING)) return;
 
     clearTimeout(_wsReconnectTimer);
-    _ws = new WebSocket(videoWsUrl());
+    const ws = new WebSocket(videoWsUrl());
+    _ws = ws;
     _ws.binaryType = "arraybuffer";
+    _wsLastConfigJson = null;
 
-    _ws.addEventListener("open", () => {
+    _ws.addEventListener("open", async () => {
+        // The config goes first, so every frame is censored with it.
+        await _wsSendConfig(ws);
+        if (ws !== _ws || ws.readyState !== WebSocket.OPEN) return;
+
         _wsReady = true;
         console.log("[VideoCensor] WebSocket connected");
 
@@ -154,6 +196,10 @@ function _videoWsEnsureConnected() {
     });
 
     _ws.addEventListener("message", (event) => {
+        if (typeof event.data === "string") {
+            _handleWsText(event.data);
+            return;
+        }
         const buf = event.data;
         if (!(buf instanceof ArrayBuffer) || buf.byteLength < 13) {
             console.warn("[VideoCensor] Received malformed packet, ignoring");

@@ -1,43 +1,30 @@
 // ── Config I/O ────────────────────────────────────────────────────────────────
-// Depends on: censor_schema.js (FEATURES, toBackendBox, fromBackendBox, ...)
-//             shared.js (state, deepClone, saveState, showToast)
-//             config.js  (buildGeneralSection, buildDefaultsSection, buildFeatureList)
+// Depends on: censor_schema.js (GENERAL_DEFAULTS, BOX_DEFAULTS)
+//             model_config.js (APP_STATE_VERSION, normalizeFeatureEntry)
+//             shared.js (state, serializeState, saveState, syncWithBackend, buildConfigTab, showToast)
 
 // ── Export ────────────────────────────────────────────────────────────────────
+// The export holds the settings as stored (flat format), so an import
+// restores them exactly:
+//   { version: 2, general, defaults, models: { model: { features } } }
 
-/**
- * Builds the export object, with censor boxes in the backend format.
- */
 function buildExportPayload() {
-  const payload = {
-    general:  toBackendGeneral(state.general),
-    defaults: toBackendBox(state.defaults),
-    features: {},
+  const saved = JSON.parse(serializeState());
+  return {
+    version:  APP_STATE_VERSION,
+    general:  saved.general,
+    defaults: saved.defaults,
+    models:   saved.models,
   };
-
-  for (const featureId of FEATURES) {
-    const f = state.features[featureId];
-    if (!f) continue;
-    payload.features[featureId] = {
-      enabled:    f.enabled,
-      useDefault: f.useDefault,
-    };
-    if (!f.useDefault && f.config) {
-      payload.features[featureId].config = toBackendBox(f.config);
-    }
-  }
-
-  return payload;
 }
 
 function handleExport() {
-  const payload = buildExportPayload();
-  const json    = JSON.stringify(payload, null, 2);
-  const blob    = new Blob([json], { type: "application/json" });
-  const url     = URL.createObjectURL(blob);
-  const a       = document.createElement("a");
-  a.href        = url;
-  a.download    = "image-censor-config.json";
+  const json = JSON.stringify(buildExportPayload(), null, 2);
+  const blob = new Blob([json], { type: "application/json" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
+  a.download = "image-censor-config.json";
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -46,6 +33,10 @@ function handleExport() {
 }
 
 // ── Import ────────────────────────────────────────────────────────────────────
+// General and defaults are replaced; models are merged by name (models in the
+// file replace the saved ones with the same name, others are kept). Labels
+// are not filtered here: settings for labels the profile doesn't have are
+// kept, but never sent to the server.
 
 function handleImport(file) {
   if (!file) return;
@@ -60,44 +51,31 @@ function handleImport(file) {
       return;
     }
 
-    // Validate top-level shape
-    if (typeof parsed !== "object" || !parsed.defaults) {
+    if (typeof parsed !== "object" || parsed === null || parsed.version !== APP_STATE_VERSION) {
       showToast("Unrecognised config format", "err");
       return;
     }
 
     try {
-      // Import general settings
-      if (parsed.general && typeof parsed.general === "object") {
-        state.general = fromBackendGeneral(parsed.general);
+      if (parsed.general  && typeof parsed.general  === "object") {
+        state.general  = { ...deepClone(GENERAL_DEFAULTS), ...parsed.general };
+      }
+      if (parsed.defaults && typeof parsed.defaults === "object") {
+        state.defaults = { ...deepClone(BOX_DEFAULTS), ...parsed.defaults };
+      }
+      for (const [model, cfg] of Object.entries(parsed.models ?? {})) {
+        if (!cfg || typeof cfg.features !== "object") continue;
+        state.models[model] = {
+          features: Object.fromEntries(
+              Object.entries(cfg.features).map(([l, entry]) => [l, normalizeFeatureEntry(entry ?? {})])
+          ),
+        };
       }
 
-      // Import defaults
-      state.defaults = fromBackendBox(parsed.defaults);
-
-      // Import feature states
-      if (parsed.features && typeof parsed.features === "object") {
-        for (const featureId of FEATURES) {
-          const src = parsed.features[featureId];
-          if (!src) continue;
-
-          state.features[featureId] = {
-            enabled:    src.enabled    ?? true,
-            useDefault: src.useDefault ?? true,
-            config:     src.useDefault === false && src.config
-              ? fromBackendBox(src.config)
-              : deepClone(state.defaults),
-          };
-        }
-      }
-
+      // Fill in labels of the current profile that the file doesn't cover.
+      await syncWithBackend();
       await saveState();
-
-      // Rebuild UI to reflect imported values
-      buildGeneralSection();
-      buildDefaultsSection();
-      buildFeatureList();
-
+      buildConfigTab();
       showToast("Config imported", "saved");
     } catch (err) {
       showToast("Import failed: " + err.message, "err");

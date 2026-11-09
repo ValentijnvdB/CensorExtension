@@ -19,6 +19,26 @@ However, the endpoints are configurable, so in principle it could be used with o
 5. If you use a self-signed certificate, go to the *connection* tab and test the connection. If it fails, follow the instructions.
 
 
+## Configuration
+
+The labels you can censor are not built into the extension: they come from the profile the CensorTool server
+is running (`GET /profile`), so any YOLO model (v8 or newer) the server loads can be configured.
+
+- Labels are grouped per model. Settings are saved per model, so switching the server between profiles or
+  models keeps the settings of each.
+- Anything without saved settings (the first start, a new model or a new label) starts from the server's own
+  censor config (`GET /censor_config`). *Reset to server* restores those settings.
+- *Import from…* copies the settings of another (e.g. a smaller or larger variant of the same) model. Labels
+  the other model doesn't have get the server's settings; labels the current model doesn't have are dropped.
+- Saved settings of models that are not in the current profile are listed under *Inactive saved configs*.
+
+The settings follow CensorTool's [censor config](https://github.com/ValentijnvdB/CensorTool) (`censor_config.md`).
+The same settings are used for images, GIFs and real-time video censoring.
+Requires a CensorTool version with the `/profile` and `/censor_config` endpoints and a `/censor_frame` WebSocket
+that accepts a config. Settings of earlier versions
+of the extension are not migrated.
+
+
 ## Planned
 - [ ] Chrome support
 - [x] ~~GIF support~~ added in v0.1

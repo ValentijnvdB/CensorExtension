@@ -88,6 +88,7 @@ async function handleSave() {
   state.baseUrl     = baseUrl;
   state.process = $("process").value.trim() || CONNECTION_DEFAULTS.process;
   await saveState();
+  await refreshBackend();
 }
 
 

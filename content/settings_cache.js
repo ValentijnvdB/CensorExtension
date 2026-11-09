@@ -1,29 +1,36 @@
 // ── Cached settings ───────────────────────────────────────────────────────────
 // Wraps readCensorSettings() with a cache that is invalidated automatically
-// whenever the stored settings change. The object is only reconstructed once
-// per save, no matter how many times getCensorSettings() is called.
+// whenever the stored settings or the backend snapshot change. The pending
+// promise is cached, so concurrent callers share one read (and one fetch).
 
 let cachedSettings = null;
+const settingsChangeListeners = [];
 
 browser.storage.onChanged.addListener((changes, area) => {
-  if (area === "local" && changes.appState) {
+  if (area === "local" && (changes.appState || changes[BACKEND_INFO_KEY])) {
     cachedSettings = null;
+    for (const listener of settingsChangeListeners) listener();
   }
 });
 
+/** Calls `listener` after the stored settings (may) have changed. */
+function onCensorSettingsChanged(listener) {
+  settingsChangeListeners.push(listener);
+}
+
 /**
- * Returns the censor settings object, rebuilding it only if the cache has
- * been invalidated since the last call.
+ * Returns the backend censor config (see readCensorSettings), or null to let
+ * the server use its own config.
  *
- * @returns {Promise<{
- *   features_to_censor: string[],
- *   default_censor_config: object,
- *   feature_overrides: object
- * }>}
+ * @returns {Promise<object|null>}
  */
-async function getCensorSettings() {
+function getCensorSettings() {
   if (cachedSettings === null) {
-    cachedSettings = await readCensorSettings();
+    cachedSettings = readCensorSettings().catch(err => {
+      cachedSettings = null;
+      console.warn("[Censor] Could not read settings:", err);
+      return null;
+    });
   }
   return cachedSettings;
 }

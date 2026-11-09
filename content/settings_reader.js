@@ -1,46 +1,25 @@
 // ── Settings reader ───────────────────────────────────────────────────────────
-// Reads the config from browser.storage.local and returns it in the format the
-// backend expects as `config` (see CensorTool's censor_config.md).
-// Depends on: common/censor_schema.js
+// Builds the censor config sent with each request (see CensorTool's
+// censor_config.md) from the saved settings and the backend's profile.
+// Depends on: common/censor_schema.js, common/backend_api.js, common/model_config.js
 
 /**
- * Reads saved settings from storage and returns them as a backend censor config:
- * {
- *   inverse_censor_style, force_inverse_censor, merge_overlapping_borders,
- *   enable_overlays, enable_watermark, stickers_dir?,
- *   features_to_censor:    string[],
- *   default_censor_config: object,
- *   feature_overrides:     { [label]: object }
- * }
+ * Returns the backend censor config, or null when the backend's profile is
+ * unknown (never fetched and unreachable). With null, no config is sent and
+ * the server uses its own censor_config.yml.
  */
 async function readCensorSettings() {
-  let raw = null;
-
+  let settings = null;
   try {
     const result = await browser.storage.local.get({ appState: null });
-    if (result.appState) {
-      raw = JSON.parse(result.appState);
-    }
-  } catch { /* fall through to defaults */ }
+    if (result.appState) settings = JSON.parse(result.appState);
+  } catch { /* use the server's settings */ }
 
-  const features_to_censor = [];
-  const feature_overrides  = {};
+  if (settings && settings.version !== APP_STATE_VERSION) settings = null;
 
-  for (const label of FEATURES) {
-    const fState = raw?.features?.[label];
+  const baseUrl = (settings?.baseUrl || DEFAULTS.baseUrl).replace(/\/$/, "");
+  const info    = await getBackendInfo(baseUrl);
+  if (!info?.profile) return null;
 
-    if (fState?.enabled ?? true) {
-      features_to_censor.push(label);
-    }
-    if (fState?.useDefault === false && fState.config) {
-      feature_overrides[label] = toBackendBox(fState.config);
-    }
-  }
-
-  return {
-    ...toBackendGeneral(raw?.general ?? {}),
-    features_to_censor,
-    default_censor_config: toBackendBox(raw?.defaults ?? {}),
-    feature_overrides,
-  };
+  return buildCensorConfig(settings, info.profile, info.censorConfig);
 }

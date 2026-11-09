@@ -1,4 +1,4 @@
-// FEATURES, GENERAL_DEFAULTS and BOX_DEFAULTS come from common/censor_schema.js
+// Depends on: common/censor_schema.js, common/backend_api.js, common/model_config.js
 
 const CONNECTION_DEFAULTS = {
   baseUrl:      "https://localhost:8443",
@@ -11,37 +11,47 @@ const $ = id => document.getElementById(id);
 const deepClone = obj => JSON.parse(JSON.stringify(obj));
 
 // ── State ─────────────────────────────────────────────────────────────────────
+// See common/model_config.js for the shape. `general` and `defaults` stay null
+// until they are seeded from the server (or the documented defaults).
 let state = {
+  version:  APP_STATE_VERSION,
   ...CONNECTION_DEFAULTS,
-  general:  deepClone(GENERAL_DEFAULTS),
-  defaults: deepClone(BOX_DEFAULTS),
-  features: {},
+  general:  null,
+  defaults: null,
+  models:   {},
 };
+
+// Last result of getBackendInfo(): { profile, censorConfig, offline, ... } | null
+let backendInfo = null;
+
+const serverCensorConfig = () => backendInfo?.censorConfig ?? null;
+const profileLabels      = () => backendInfo?.profile?.labels ?? [];
+const labelGroups        = () => groupLabelsByModel(backendInfo?.profile);
 
 // ── Persistence ───────────────────────────────────────────────────────────────
 
-// Before saving, strip the `config` field from any feature that uses the
-// default — there's no point persisting a redundant copy of BOX_DEFAULTS
-// for every feature
+// Features that use the default don't need their config persisted.
 function serializeState() {
-  const slim = {
+  const slimFeatures = features => Object.fromEntries(
+      Object.entries(features ?? {}).map(([label, f]) => [
+        label,
+        f.useDefault
+            ? { enabled: f.enabled, useDefault: true }
+            : { enabled: f.enabled, useDefault: false, config: f.config },
+      ])
+  );
+  return JSON.stringify({
     ...state,
-    features: Object.fromEntries(
-        Object.entries(state.features).map(([id, f]) => [
-          id,
-          f.useDefault
-              ? { enabled: f.enabled, useDefault: true }   // drop config entirely
-              : { enabled: f.enabled, useDefault: false, config: f.config },
-        ])
+    models: Object.fromEntries(
+        Object.entries(state.models).map(([m, cfg]) => [m, { features: slimFeatures(cfg.features) }])
     ),
-  };
-  return JSON.stringify(slim);
+  });
 }
 
-async function saveState() {
+async function saveState({ silent = false } = {}) {
   try {
     await browser.storage.local.set({ appState: serializeState() });
-    showToast("Saved", "saved");
+    if (!silent) showToast("Saved", "saved");
   } catch (error) {
     showToast("Failed to save: " + error, "err");
   }
@@ -52,30 +62,67 @@ async function loadState() {
     const result = await browser.storage.local.get({ appState: null });
     if (result.appState) {
       const saved = JSON.parse(result.appState);
-      state = { ...state, ...saved };
+      // Settings from older versions are not migrated.
+      if (saved.version === APP_STATE_VERSION) state = { ...state, ...saved };
     }
   } catch { /* use defaults */ }
 
-  // Ensure general settings are fully populated
-  state.general  = { ...GENERAL_DEFAULTS, ...(state.general ?? {}) };
-  state.defaults = { ...deepClone(BOX_DEFAULTS), ...(state.defaults ?? {}) };
+  state.models ??= {};
+  for (const cfg of Object.values(state.models)) {
+    cfg.features = Object.fromEntries(
+        Object.entries(cfg.features ?? {}).map(([l, e]) => [l, normalizeFeatureEntry(e)])
+    );
+  }
+}
 
-  // Ensure every known feature has a fully-populated entry in memory,
-  // restoring the config field for useDefault features if it was stripped.
-  for (const f of FEATURES) {
-    if (!state.features[f]) {
-      state.features[f] = {
-        enabled:    true,
-        useDefault: true,
-        config:     deepClone(BOX_DEFAULTS),
-      };
-    } else if (state.features[f].useDefault && !state.features[f].config) {
-      // Re-hydrate stripped config so the rest of the UI works normally.
-      state.features[f].config = deepClone(BOX_DEFAULTS);
-    } else {
-      state.features[f].config = { ...deepClone(BOX_DEFAULTS), ...state.features[f].config };
+// ── Backend sync ──────────────────────────────────────────────────────────────
+
+/**
+ * Fetches the profile and server censor config, and fills in everything that
+ * has no saved settings yet (general, defaults, new models and labels) from
+ * the server's censor config.
+ */
+async function syncWithBackend() {
+  backendInfo = await getBackendInfo(state.baseUrl, 0);
+  const cc = serverCensorConfig();
+  let changed = false;
+
+  if (!state.general)  { state.general  = resolveGeneral(null, cc);  changed = Boolean(cc); }
+  if (!state.defaults) { state.defaults = resolveDefaults(null, cc); changed = changed || Boolean(cc); }
+
+  for (const [model, labels] of Object.entries(labelGroups())) {
+    const features = (state.models[model] ??= { features: {} }).features;
+    for (const label of labels) {
+      if (!features[label]) {
+        features[label] = serverFeatureEntry(label, cc);
+        changed = true;
+      }
     }
   }
+
+  if (changed) await saveState({ silent: true });
+}
+
+// ── Model operations ──────────────────────────────────────────────────────────
+
+/** Replaces the settings of `model` with the server's censor config. */
+function resetModelToServer(model) {
+  const labels = labelGroups()[model] ?? [];
+  state.models[model] = { features: serverModelFeatures(labels, serverCensorConfig()) };
+}
+
+/** Imports the label settings of `fromModel` into `toModel` (see importModelFeatures). */
+function importIntoModel(fromModel, toModel) {
+  const labels = labelGroups()[toModel] ?? [];
+  state.models[toModel] = {
+    features: importModelFeatures(state.models[fromModel]?.features, labels, serverCensorConfig()),
+  };
+}
+
+function resetGeneralAndDefaultsToServer() {
+  const cc = serverCensorConfig();
+  state.general  = resolveGeneral(null, cc);
+  state.defaults = resolveDefaults(null, cc);
 }
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
@@ -99,9 +146,22 @@ function showToast(msg, type) {
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
-loadState().then(() => {
-  initConnectionTab();
+
+function buildConfigTab() {
+  buildProfileSection();
   buildGeneralSection();
   buildDefaultsSection();
-  buildFeatureList();
+  buildModelSections();
+}
+
+/** Re-fetches the backend info and rebuilds the config tab. */
+async function refreshBackend() {
+  setProfileStatus("testing", "loading profile…");
+  await syncWithBackend();
+  buildConfigTab();
+}
+
+loadState().then(async () => {
+  initConnectionTab();
+  await refreshBackend();
 });

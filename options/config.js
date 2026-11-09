@@ -1,5 +1,5 @@
 // ── Config tab ────────────────────────────────────────────────────────────────
-// Depends on: censor_schema.js (FEATURES, CENSOR_STYLES, SHAPES, ...)
+// Depends on: censor_schema.js (CENSOR_STYLES, SHAPES, ...)
 //             shared.js (state, $, deepClone, saveState)
 
 
@@ -207,9 +207,9 @@ function buildToggleSwitch(id, checked, onChange) {
 
 /**
  * Renders the censor box fields for `cfg` (flat format, see censor_schema.js).
- * `clipLabels` are the labels offered for clip_to.
+ * `clipLabels` are the labels offered for clip_to (default: the profile's labels).
  */
-function buildConfigFields(container, cfg, onChange, clipLabels = FEATURES) {
+function buildConfigFields(container, cfg, onChange, clipLabels = profileLabels()) {
   if (typeof container === "string") container = $(container);
   container.innerHTML = "";
   // Use a unique prefix per container to avoid duplicate IDs
@@ -367,82 +367,235 @@ function buildDefaultsSection() {
   buildConfigFields("defaults-fields", state.defaults, () => saveState());
 }
 
-// ── Feature accordion ─────────────────────────────────────────────────────────
+// ── Profile section ───────────────────────────────────────────────────────────
 
-function buildFeatureList() {
-  const list = $("feature-list");
-  list.innerHTML = "";
+function setProfileStatus(kind, text) {
+  $("profileDot").className    = `dot ${kind}`;
+  $("profileStatus").className = `status-text ${kind}`;
+  $("profileStatus").textContent = text;
+}
 
-  for (const featureId of FEATURES) {
-    const fState = state.features[featureId];
+function buildProfileSection() {
+  const profile = backendInfo?.profile;
+  $("profileName").textContent = profile?.name ?? "—";
+  $("btnResetGeneral").disabled = !serverCensorConfig();
 
-    const item = document.createElement("div");
-    item.className = "accordion-item" + (fState.enabled ? "" : " disabled");
+  if (!backendInfo) {
+    setProfileStatus("fail", "backend unreachable — check the Connection tab");
+  } else if (backendInfo.offline) {
+    const when = new Date(backendInfo.fetchedAt).toLocaleString();
+    setProfileStatus("warn", `offline — showing the profile cached at ${when}`);
+  } else if (!serverCensorConfig()) {
+    setProfileStatus("warn", "connected — server has no /censor_config, using built-in defaults");
+  } else {
+    setProfileStatus("ok", `connected — ${profile.labels.length} labels`);
+  }
+}
 
-    // Header
-    const header = document.createElement("div");
-    header.className = "accordion-header";
+$("btnRefreshProfile").addEventListener("click", refreshBackend);
 
-    const enabledTog = buildToggleSwitch(`feat-enabled-${featureId}`, fState.enabled, val => {
-      fState.enabled = val;
-      item.classList.toggle("disabled", !val);
-      saveState();
+$("btnResetGeneral").addEventListener("click", async () => {
+  if (!confirm("Replace the General and Defaults settings with the server's censor config?")) return;
+  resetGeneralAndDefaultsToServer();
+  await saveState();
+  buildGeneralSection();
+  buildDefaultsSection();
+});
+
+// ── Model sections ────────────────────────────────────────────────────────────
+
+const domId = str => str.replace(/[^\w-]/g, "_");
+
+function makeButton(text, onClick, className = "btn-small") {
+  const btn = document.createElement("button");
+  btn.className = className;
+  btn.textContent = text;
+  btn.addEventListener("click", onClick);
+  return btn;
+}
+
+function buildModelSections() {
+  const container = $("model-sections");
+  container.innerHTML = "";
+
+  const groups = labelGroups();
+  for (const [model, labels] of Object.entries(groups)) {
+    container.appendChild(buildModelCard(model, labels, groups));
+  }
+  buildInactiveModels(groups);
+}
+
+function buildModelCard(model, labels, groups) {
+  const features = state.models[model].features;
+
+  const card = document.createElement("div");
+  card.className = "card model-card";
+
+  const header = document.createElement("div");
+  header.className = "model-header";
+  const title = document.createElement("p");
+  title.className = "card-label";
+  title.textContent = `Model · ${model}`;
+  const count = document.createElement("span");
+  count.className = "model-count";
+  const updateCount = () => {
+    const enabled = labels.filter(l => features[l].enabled).length;
+    count.textContent = `${enabled}/${labels.length} enabled`;
+  };
+  header.append(title, count);
+  card.appendChild(header);
+
+  const rebuild = () => card.replaceWith(buildModelCard(model, labels, labelGroups()));
+
+  // Actions
+  const actions = document.createElement("div");
+  actions.className = "model-actions";
+
+  const setAll = enabled => async () => {
+    for (const l of labels) features[l].enabled = enabled;
+    await saveState();
+    rebuild();
+  };
+  actions.appendChild(makeButton("Enable all", setAll(true)));
+  actions.appendChild(makeButton("Disable all", setAll(false)));
+
+  const resetBtn = makeButton("Reset to server", async () => {
+    if (!confirm(`Replace the settings of "${model}" with the server's censor config?`)) return;
+    resetModelToServer(model);
+    await saveState();
+    rebuild();
+  });
+  resetBtn.disabled = !serverCensorConfig();
+  actions.appendChild(resetBtn);
+
+  const sources = Object.keys(state.models).filter(m => m !== model).sort();
+  if (sources.length) {
+    const sel = document.createElement("select");
+    sel.className = "cfg-select model-import-select";
+    sel.appendChild(new Option("Import from…", ""));
+    for (const m of sources) {
+      sel.appendChild(new Option(m in groups ? m : `${m} (inactive)`, m));
+    }
+    sel.addEventListener("change", async () => {
+      const from = sel.value;
+      sel.value = "";
+      if (!from) return;
+      if (!confirm(`Replace the settings of "${model}" with those of "${from}"?\n` +
+                   `Labels "${from}" doesn't have get the server's settings.`)) return;
+      importIntoModel(from, model);
+      await saveState();
+      showToast(`Imported settings from ${from}`, "saved");
+      rebuild();
     });
+    actions.appendChild(sel);
+  }
+  card.appendChild(actions);
 
-    const name = document.createElement("span");
-    name.className = "accordion-name";
-    name.textContent = featureId.replace(/_/g, " ");
+  // Labels
+  const list = document.createElement("div");
+  list.className = "feature-list";
+  for (const label of labels) {
+    list.appendChild(buildFeatureItem(model, label, features[label], updateCount));
+  }
+  card.appendChild(list);
 
-    const chevron = document.createElement("span");
-    chevron.className = "accordion-chevron";
-    chevron.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>`;
+  updateCount();
+  return card;
+}
 
-    header.appendChild(enabledTog);
-    header.appendChild(name);
-    header.appendChild(chevron);
+function buildFeatureItem(model, label, fState, onEnabledChange) {
+  const id = domId(`${model}-${label}`);
 
-    // Body
-    const body = document.createElement("div");
-    body.className = "accordion-body";
+  const item = document.createElement("div");
+  item.className = "accordion-item" + (fState.enabled ? "" : " disabled");
 
-    // "Use default" row
-    const useDefaultRow = document.createElement("div");
-    useDefaultRow.className = "field field-toggle use-default-row";
-    const udLabel = document.createElement("span");
-    udLabel.className = "toggle-label";
-    udLabel.textContent = "Use default";
+  // Header
+  const header = document.createElement("div");
+  header.className = "accordion-header";
 
-    const overrideSection = document.createElement("div");
-    overrideSection.className = "override-section";
-    overrideSection.id = `override-fields-${featureId}`;
-    overrideSection.style.display = fState.useDefault ? "none" : "";
+  const enabledTog = buildToggleSwitch(`feat-enabled-${id}`, fState.enabled, val => {
+    fState.enabled = val;
+    item.classList.toggle("disabled", !val);
+    onEnabledChange();
+    saveState();
+  });
 
-    const udTog = buildToggleSwitch(`feat-usedefault-${featureId}`, fState.useDefault, val => {
-      fState.useDefault = val;
-      overrideSection.style.display = val ? "none" : "";
-      if (!val && overrideSection.innerHTML === "") {
-        fState.config = deepClone(state.defaults);
-        buildConfigFields(overrideSection, fState.config, () => saveState());
-      }
-      saveState();
-    });
+  const name = document.createElement("span");
+  name.className = "accordion-name";
+  name.textContent = label.replace(/_/g, " ");
 
-    useDefaultRow.appendChild(udLabel);
-    useDefaultRow.appendChild(udTog);
-    body.appendChild(useDefaultRow);
-    body.appendChild(overrideSection);
+  const chevron = document.createElement("span");
+  chevron.className = "accordion-chevron";
+  chevron.innerHTML = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="6 9 12 15 18 9"/></svg>`;
 
-    if (!fState.useDefault) {
+  header.append(enabledTog, name, chevron);
+
+  // Body
+  const body = document.createElement("div");
+  body.className = "accordion-body";
+
+  const useDefaultRow = document.createElement("div");
+  useDefaultRow.className = "field field-toggle use-default-row";
+  const udLabel = document.createElement("span");
+  udLabel.className = "toggle-label";
+  udLabel.textContent = "Use default";
+
+  const overrideSection = document.createElement("div");
+  overrideSection.className = "override-section";
+  overrideSection.id = `override-fields-${id}`;
+  overrideSection.style.display = fState.useDefault ? "none" : "";
+
+  const udTog = buildToggleSwitch(`feat-usedefault-${id}`, fState.useDefault, val => {
+    fState.useDefault = val;
+    overrideSection.style.display = val ? "none" : "";
+    if (!val && overrideSection.innerHTML === "") {
+      fState.config = deepClone(state.defaults);
       buildConfigFields(overrideSection, fState.config, () => saveState());
     }
+    saveState();
+  });
 
-    item.appendChild(header);
-    item.appendChild(body);
-    list.appendChild(item);
+  useDefaultRow.append(udLabel, udTog);
+  body.append(useDefaultRow, overrideSection);
 
-    header.addEventListener("click", e => {
-      if (e.target.closest(".toggle-switch")) return;
-      item.classList.toggle("open");
-    });
+  if (!fState.useDefault) {
+    buildConfigFields(overrideSection, fState.config, () => saveState());
+  }
+
+  item.append(header, body);
+
+  header.addEventListener("click", e => {
+    if (e.target.closest(".toggle-switch")) return;
+    item.classList.toggle("open");
+  });
+
+  return item;
+}
+
+// ── Inactive saved configs ────────────────────────────────────────────────────
+
+function buildInactiveModels(groups) {
+  const card = $("inactive-card");
+  const list = $("inactive-list");
+  list.innerHTML = "";
+
+  const inactive = Object.keys(state.models).filter(m => !(m in groups)).sort();
+  card.style.display = inactive.length ? "" : "none";
+
+  for (const model of inactive) {
+    const row = document.createElement("div");
+    row.className = "field inactive-row";
+    const name = document.createElement("span");
+    name.className = "toggle-label";
+    const n = Object.keys(state.models[model].features ?? {}).length;
+    name.textContent = `${model} · ${n} labels`;
+    row.appendChild(name);
+    row.appendChild(makeButton("Delete", async () => {
+      if (!confirm(`Delete the saved settings of "${model}"?`)) return;
+      delete state.models[model];
+      await saveState();
+      buildModelSections();
+    }, "btn-small btn-danger"));
+    list.appendChild(row);
   }
 }

@@ -671,3 +671,61 @@ footer {
   cursor: pointer;
 }
 .multi-check-item input { accent-color: var(--accent); }
+
+/* ── Small buttons ── */
+.btn-small {
+  padding: 6px 12px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  color: var(--muted);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.btn-small:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.btn-small:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-danger:hover:not(:disabled) { border-color: var(--error); color: var(--error); }
+
+/* ── Profile ── */
+.profile-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.profile-name {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 15px;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+
+/* ── Model sections ── */
+.model-card { margin-top: 16px; }
+.model-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+.model-header .card-label { overflow-wrap: anywhere; }
+.model-count {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.model-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+.model-actions .model-import-select { flex: 1; min-width: 140px; max-width: none; padding: 6px 10px; font-size: 11px; }
+
+.inactive-row { margin-bottom: 12px; }
+.inactive-row:last-child { margin-bottom: 0; }

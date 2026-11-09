@@ -7,29 +7,6 @@
 // the blur strength while the style is set to pixel). The functions below
 // convert between the flat format and the backend format.
 
-// Labels of the default NudeNet profile. Temporary: replaced by the labels
-// from GET /profile.
-const FEATURES = [
-  "FACE_FEMALE",
-  "FEMALE_BREAST_EXPOSED",
-  "FEMALE_GENITALIA_EXPOSED",
-  "ANUS_EXPOSED",
-  "BUTTOCKS_EXPOSED",
-  "FEET_EXPOSED",
-  "BELLY_EXPOSED",
-  "FEMALE_BREAST_COVERED",
-  "FEMALE_GENITALIA_COVERED",
-  "BELLY_COVERED",
-  "FEET_COVERED",
-  "ARMPITS_COVERED",
-  "BUTTOCKS_COVERED",
-  "FACE_MALE",
-  "MALE_BREAST_EXPOSED",
-  "MALE_GENITALIA_EXPOSED",
-  "ARMPITS_EXPOSED",
-  "ANUS_COVERED",
-];
-
 const CENSOR_STYLES         = ["blur", "pixel", "bar", "debug", "ai_remove"];
 const INVERSE_CENSOR_STYLES = ["blur", "pixel", "bar"];
 const SHAPES                = ["default", "rectangle", "ellipse", "circle", "mask"];

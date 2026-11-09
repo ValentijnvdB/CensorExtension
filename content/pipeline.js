@@ -60,6 +60,7 @@ async function fetchImageAsBase64(url) {
 async function fetchCensored(img, originalSrc) {
     try {
         const { base64, mimeType } = await fetchImageAsBase64(originalSrc);
+        const config = await getCensorSettings();
 
         const response = await fetch(ENDPOINTS.process, {
             method:  "POST",
@@ -70,7 +71,8 @@ async function fetchCensored(img, originalSrc) {
                 mime_type: mimeType,
                 image_url: originalSrc,
                 expected_response: 'base64',
-                config: await getCensorSettings()
+                // No config → the server uses its own censor_config.yml
+                ...(config ? { config } : {}),
             }),
         });
 
