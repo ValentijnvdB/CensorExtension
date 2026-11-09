@@ -6,7 +6,7 @@
 let cachedSettings = null;
 
 browser.storage.onChanged.addListener((changes, area) => {
-  if (area === "sync" && changes.appState) {
+  if (area === "local" && changes.appState) {
     cachedSettings = null;
   }
 });

@@ -22,7 +22,10 @@
  *   on cancel, so frames that haven't left the browser yet never reach the wire.
  */
 
-const VIDEO_WS_URL = "wss://localhost:8443/censor_frame";
+/** WebSocket URL derived from the configured base URL (http→ws, https→wss). */
+function videoWsUrl() {
+    return `${BASE_URL.replace(/^http/, "ws")}/censor_frame`;
+}
 
 const MSG_TYPE_FRAME  = 0;
 const MSG_TYPE_CANCEL = 1;
@@ -132,7 +135,7 @@ function _videoWsEnsureConnected() {
     if (_ws && (_ws.readyState === WebSocket.OPEN || _ws.readyState === WebSocket.CONNECTING)) return;
 
     clearTimeout(_wsReconnectTimer);
-    _ws = new WebSocket(VIDEO_WS_URL);
+    _ws = new WebSocket(videoWsUrl());
     _ws.binaryType = "arraybuffer";
 
     _ws.addEventListener("open", () => {

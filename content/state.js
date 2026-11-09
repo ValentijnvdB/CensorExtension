@@ -66,3 +66,20 @@ const inFlight  = new WeakSet();
 
 let pendingBatch   = [];
 let batchScheduled = false;
+
+/**
+ * Reads the connection settings (base URL + process endpoint) saved by the
+ * options page in browser.storage.local (appState), falling back to DEFAULTS.
+ */
+async function readConnectionSettings() {
+    try {
+        const { appState } = await browser.storage.local.get({ appState: null });
+        const saved = appState ? JSON.parse(appState) : {};
+        return {
+            baseUrl: saved.baseUrl || DEFAULTS.baseUrl,
+            process: saved.process || DEFAULTS.process,
+        };
+    } catch {
+        return { ...DEFAULTS };
+    }
+}

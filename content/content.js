@@ -11,12 +11,13 @@
 // ── Init ──────────────────────────────────────────────────────────────────────
 
 Promise.all([
-    browser.storage.sync.get({ ...DEFAULTS, ...SETTING_DEFAULTS }),
+    browser.storage.sync.get(SETTING_DEFAULTS),
+    readConnectionSettings(),
     loadFilters(),
-]).then(([stored, filters]) => {
-    BASE_URL  = stored.baseUrl.replace(/\/$/, "");
+]).then(([stored, connection, filters]) => {
+    BASE_URL  = connection.baseUrl.replace(/\/$/, "");
     ENDPOINTS = {
-        process: `${BASE_URL}${stored.process}`,
+        process: `${BASE_URL}${connection.process}`,
         loading: browser.runtime.getURL("assets/loading_image.png"),
     };
 
