@@ -145,7 +145,7 @@ function _wsPurgeQueue(videoId, seekId) {
  * server then re-censors frames it could answer from memory.
  */
 async function _wsSendConfig(ws) {
-    const config = await getCensorSettings();
+    const config = await getCensorSettings("video");
     const json   = JSON.stringify({ type: "config", config });
     if (ws !== _ws || ws.readyState !== WebSocket.OPEN || json === _wsLastConfigJson) return;
     ws.send(json);

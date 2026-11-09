@@ -47,7 +47,8 @@ const GENERAL_DEFAULTS = {
   inverse_pixel_factor:      20,
   inverse_bar_color:         "#000000",
   merge_overlapping_borders: false,
-  enable_overlays:           true,
+  enable_image_overlays:     true,
+  enable_video_overlays:     true,
   enable_watermark:          false,
   stickers_dir:              "data/stickers",
 };
@@ -186,9 +187,27 @@ function fromBackendBox(box) {
 
 // ── General settings conversion ───────────────────────────────────────────────
 
-/** Flat general settings → backend top-level settings. */
-function toBackendGeneral(flat) {
-  const g = { ...GENERAL_DEFAULTS, ...flat };
+/**
+ * Fills in missing keys of stored flat general settings. Settings saved before
+ * the overlay toggle was split per media type have a single `enable_overlays`,
+ * which is used for both images and videos.
+ */
+function normalizeGeneral(stored) {
+  const { enable_overlays, ...rest } = stored ?? {};
+  const g = { ...cloneJson(GENERAL_DEFAULTS), ...rest };
+  if (typeof enable_overlays === "boolean") {
+    if (typeof rest.enable_image_overlays !== "boolean") g.enable_image_overlays = enable_overlays;
+    if (typeof rest.enable_video_overlays !== "boolean") g.enable_video_overlays = enable_overlays;
+  }
+  return g;
+}
+
+/**
+ * Flat general settings → backend top-level settings. The backend has a single
+ * `enable_overlays`; `media` ("image" | "video") picks which toggle feeds it.
+ */
+function toBackendGeneral(flat, media = "image") {
+  const g = normalizeGeneral(flat);
   const styles = {
     blur:  { strength: g.inverse_blur_strength },
     pixel: { factor:   g.inverse_pixel_factor },
@@ -200,7 +219,7 @@ function toBackendGeneral(flat) {
     inverse_censor_style:      { type: style, ...styles[style] },
     force_inverse_censor:      g.force_inverse_censor,
     merge_overlapping_borders: g.merge_overlapping_borders,
-    enable_overlays:           g.enable_overlays,
+    enable_overlays:           media === "video" ? g.enable_video_overlays : g.enable_image_overlays,
     enable_watermark:          g.enable_watermark,
   };
   if (g.stickers_dir && g.stickers_dir.trim()) out.stickers_dir = g.stickers_dir.trim();
@@ -220,8 +239,12 @@ function fromBackendGeneral(cfg) {
     if (style.type === "bar"   && style.color    !== undefined) flat.inverse_bar_color     = rgbToHex(style.color);
   }
 
-  for (const key of ["force_inverse_censor", "merge_overlapping_borders", "enable_overlays", "enable_watermark"]) {
+  for (const key of ["force_inverse_censor", "merge_overlapping_borders", "enable_watermark"]) {
     if (typeof cfg[key] === "boolean") flat[key] = cfg[key];
+  }
+  if (typeof cfg.enable_overlays === "boolean") {
+    flat.enable_image_overlays = cfg.enable_overlays;
+    flat.enable_video_overlays = cfg.enable_overlays;
   }
   if (typeof cfg.stickers_dir === "string") flat.stickers_dir = cfg.stickers_dir;
 

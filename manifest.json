@@ -68,7 +68,10 @@
 
   "browser_specific_settings": {
     "gecko": {
-      "id": "my@censor_extension"
+      "id": "my@censor_extension",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
     }
   }
 }

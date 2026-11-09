@@ -4,11 +4,11 @@
 // Depends on: common/censor_schema.js, common/backend_api.js, common/model_config.js
 
 /**
- * Returns the backend censor config, or null when the backend's profile is
+ * Returns the backend censor config for `media` ("image" | "video"), or null when the backend's profile is
  * unknown (never fetched and unreachable). With null, no config is sent and
  * the server uses its own censor_config.yml.
  */
-async function readCensorSettings() {
+async function readCensorSettings(media = "image") {
   let settings = null;
   try {
     const result = await browser.storage.local.get({ appState: null });
@@ -21,5 +21,5 @@ async function readCensorSettings() {
   const info    = await getBackendInfo(baseUrl);
   if (!info?.profile) return null;
 
-  return buildCensorConfig(settings, info.profile, info.censorConfig);
+  return buildCensorConfig(settings, info.profile, info.censorConfig, media);
 }

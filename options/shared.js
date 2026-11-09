@@ -48,10 +48,22 @@ function serializeState() {
   });
 }
 
+// A warning shown by the next saveState() in place of "Saved", so the two
+// toasts don't overwrite each other.
+let pendingSaveWarning = null;
+
+/** Shows `msg` as a warning toast once the next save completes. */
+function warnAfterSave(msg) {
+  pendingSaveWarning = msg;
+}
+
 async function saveState({ silent = false } = {}) {
   try {
     await browser.storage.local.set({ appState: serializeState() });
-    if (!silent) showToast("Saved", "saved");
+    const warning = pendingSaveWarning;
+    pendingSaveWarning = null;
+    if (warning)      showToast(warning, "warn");
+    else if (!silent) showToast("Saved", "saved");
   } catch (error) {
     showToast("Failed to save: " + error, "err");
   }
@@ -67,6 +79,7 @@ async function loadState() {
     }
   } catch { /* use defaults */ }
 
+  if (state.general) state.general = normalizeGeneral(state.general);
   state.models ??= {};
   for (const cfg of Object.values(state.models)) {
     cfg.features = Object.fromEntries(
@@ -142,7 +155,7 @@ function showToast(msg, type) {
   el.textContent = msg;
   el.className = `toast ${type} show`;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { el.className = "toast"; }, 2400);
+  toastTimer = setTimeout(() => { el.className = "toast"; }, type === "warn" ? 5000 : 2400);
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────

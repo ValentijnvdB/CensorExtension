@@ -356,6 +356,7 @@ input.error { border-color: var(--error); }
 .toast.show  { opacity: 1; transform: translateX(-50%) translateY(0); }
 .toast.saved { color: var(--success); border-color: var(--success); }
 .toast.err   { color: var(--error);   border-color: var(--error); }
+.toast.warn  { color: var(--warn);    border-color: var(--warn); }
 
 /* ── Config fields ── */
 .cfg-input {

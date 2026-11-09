@@ -80,7 +80,7 @@ function importModelFeatures(sourceFeatures, labels, censorConfig) {
 /** Effective flat general settings. */
 function resolveGeneral(settings, censorConfig) {
   return settings?.general
-      ? { ...cloneJson(GENERAL_DEFAULTS), ...settings.general }
+      ? normalizeGeneral(settings.general)
       : fromBackendGeneral(censorConfig);
 }
 
@@ -92,10 +92,10 @@ function resolveDefaults(settings, censorConfig) {
 }
 
 /**
- * Builds the backend censor config for the labels in `profile`.
- * clip_to labels the profile cannot detect are dropped.
+ * Builds the backend censor config for the labels in `profile`, for `media`
+ * ("image" | "video"). clip_to labels the profile cannot detect are dropped.
  */
-function buildCensorConfig(settings, profile, censorConfig) {
+function buildCensorConfig(settings, profile, censorConfig, media = "image") {
   const known = new Set(profile?.labels ?? []);
   const backendBox = flat => {
     const box = toBackendBox(flat);
@@ -115,7 +115,7 @@ function buildCensorConfig(settings, profile, censorConfig) {
   }
 
   return {
-    ...toBackendGeneral(resolveGeneral(settings, censorConfig)),
+    ...toBackendGeneral(resolveGeneral(settings, censorConfig), media),
     features_to_censor,
     default_censor_config: backendBox(resolveDefaults(settings, censorConfig)),
     feature_overrides,

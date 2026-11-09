@@ -258,8 +258,12 @@ function buildConfigFields(container, cfg, onChange, clipLabels = profileLabels(
   container.appendChild(makeSelect(`shape-${pfx}`, "Shape", cfg.shape, SHAPES, set("shape")));
 
   // Overlay
-  container.appendChild(makeSelect(`overlay_type-${pfx}`, "Overlay", cfg.overlay_type,
-      OVERLAY_TYPES, set("overlay_type", true)));
+  container.appendChild(makeSelect(`overlay_type-${pfx}`, "Overlay", cfg.overlay_type, OVERLAY_TYPES, val => {
+    if (val !== "off" && state.general && !state.general.enable_image_overlays) {
+      warnAfterSave(IMAGE_OVERLAYS_OFF_WARNING);
+    }
+    set("overlay_type", true)(val);
+  }));
 
   const overlayTextWrap = makeSubWrap("overlay-text-wrap");
   overlayTextWrap.appendChild(makeFloat(`overlay_probability-${pfx}`, "Probability", cfg.overlay_probability, 0, 1, set("overlay_probability")));
@@ -302,6 +306,19 @@ function refreshConditionals(container, cfg) {
 
 // ── General section ───────────────────────────────────────────────────────────
 
+const IMAGE_OVERLAYS_OFF_WARNING =
+    "Overlays won't show on images: turn on \"Enable image overlays\" in General";
+
+/** True when the default box or any label override has an overlay selected. */
+function anyBoxUsesOverlay() {
+  const boxes = [
+    state.defaults,
+    ...Object.values(state.models).flatMap(m => Object.values(m.features ?? {}))
+        .filter(f => !f.useDefault).map(f => f.config),
+  ];
+  return boxes.some(box => box && box.overlay_type !== "off");
+}
+
 function buildGeneralSection() {
   const container = $("general-fields");
   container.innerHTML = "";
@@ -335,7 +352,11 @@ function buildGeneralSection() {
 
   container.appendChild(inverseWrap);
 
-  container.appendChild(makeToggle("gen-enable-overlays", "Enable overlays", g.enable_overlays, set("enable_overlays")));
+  container.appendChild(makeToggle("gen-enable-image-overlays", "Enable image overlays", g.enable_image_overlays, val => {
+    if (!val && anyBoxUsesOverlay()) warnAfterSave(IMAGE_OVERLAYS_OFF_WARNING);
+    set("enable_image_overlays")(val);
+  }));
+  container.appendChild(makeToggle("gen-enable-video-overlays", "Enable video overlays", g.enable_video_overlays, set("enable_video_overlays")));
 
   // Advanced spoiler
   const spoiler = makeSpoiler("Advanced");

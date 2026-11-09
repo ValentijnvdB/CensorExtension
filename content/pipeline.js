@@ -60,7 +60,7 @@ async function fetchImageAsBase64(url) {
 async function fetchCensored(img, originalSrc) {
     try {
         const { base64, mimeType } = await fetchImageAsBase64(originalSrc);
-        const config = await getCensorSettings();
+        const config = await getCensorSettings("image");
 
         const response = await fetch(ENDPOINTS.process, {
             method:  "POST",

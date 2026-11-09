@@ -1,5 +1,5 @@
 // ── Config I/O ────────────────────────────────────────────────────────────────
-// Depends on: censor_schema.js (GENERAL_DEFAULTS, BOX_DEFAULTS)
+// Depends on: censor_schema.js (normalizeGeneral, BOX_DEFAULTS)
 //             model_config.js (APP_STATE_VERSION, normalizeFeatureEntry)
 //             shared.js (state, serializeState, saveState, syncWithBackend, buildConfigTab, showToast)
 
@@ -58,7 +58,7 @@ function handleImport(file) {
 
     try {
       if (parsed.general  && typeof parsed.general  === "object") {
-        state.general  = { ...deepClone(GENERAL_DEFAULTS), ...parsed.general };
+        state.general  = normalizeGeneral(parsed.general);
       }
       if (parsed.defaults && typeof parsed.defaults === "object") {
         state.defaults = { ...deepClone(BOX_DEFAULTS), ...parsed.defaults };
