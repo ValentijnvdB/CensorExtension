@@ -11,15 +11,19 @@ function enqueueImage(img) {
         return;
     }
 
-    // Handle GIF removal before the normal censoring pipeline.
-    replaceGifIfNeeded(img);
-
     if (processed.has(img)) return;
 
     const displayedSrc = getDisplayedSrc(img);
     if (isOwnAsset(displayedSrc)) return;
 
     const absoluteSrc = toAbsolute(displayedSrc);
+
+    // GIFs are handled by gifs.js (removed, left alone or sent to /censor_video).
+    if (isGif(absoluteSrc)) {
+        handleGif(img, absoluteSrc);
+        return;
+    }
+
     if (isFiltered(absoluteSrc)) return;
 
     processed.add(img);
@@ -42,25 +46,37 @@ function flushBatch() {
     Promise.allSettled(batch.map(({ img, originalSrc }) => fetchCensored(img, originalSrc)));
 }
 
-async function fetchImageAsBase64(url) {
-    const response = await fetch(url, { credentials: "include" });
+async function fetchBlob(url, signal) {
+    const response = await fetch(url, { credentials: "include", signal });
     if (!response.ok) throw new Error(`Failed to fetch image: ${response.status}`);
+    return response.blob();
+}
 
-    const blob     = await response.blob();
-    const mimeType = blob.type || "image/jpeg";
-
+function readBlobAsDataUrl(blob) {
     return new Promise((resolve, reject) => {
         const reader   = new FileReader();
-        reader.onload  = () => resolve({ base64: reader.result.split(",")[1], mimeType });
+        reader.onload  = () => resolve(reader.result);
         reader.onerror = () => reject(new Error("FileReader failed"));
         reader.readAsDataURL(blob);
     });
 }
 
 async function fetchCensored(img, originalSrc) {
+    let handedOff = false;
     try {
-        const { base64, mimeType } = await fetchImageAsBase64(originalSrc);
-        const config = await getCensorSettings("image");
+        const blob = await fetchBlob(originalSrc);
+
+        // A GIF without a .gif URL: let gifs.js handle it.
+        if (blob.type === "image/gif") {
+            handedOff = true;
+            inFlight.delete(img);
+            handleDetectedGif(img, originalSrc, blob);
+            return;
+        }
+
+        const mimeType = blob.type || "image/jpeg";
+        const base64   = (await readBlobAsDataUrl(blob)).split(",")[1];
+        const config   = await getCensorSettings("image");
 
         const response = await fetch(ENDPOINTS.process, {
             method:  "POST",
@@ -113,7 +129,8 @@ async function fetchCensored(img, originalSrc) {
     } catch (err) {
         console.warn("[ImageCensor] Failed to process image:", originalSrc, err);
     } finally {
-        inFlight.delete(img);
+        // After a hand-off gifs.js owns the inFlight entry.
+        if (!handedOff) inFlight.delete(img);
     }
 }
 

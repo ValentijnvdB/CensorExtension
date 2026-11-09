@@ -26,8 +26,7 @@ Promise.all([
     settings.gifBehavior      = stored.gifBehavior;
     settings.videoBehavior    = stored.videoBehavior;
 
-    // Bool aliases used by gifs.js / videos.js.
-    settings.removeGifs   = stored.gifBehavior   === 'remove';
+    // Bool aliases used by videos.js.
     settings.removeVideos = stored.videoBehavior === 'remove';
     settings.censorVideos = stored.videoBehavior === 'censor';
 
@@ -60,7 +59,6 @@ browser.runtime.onMessage.addListener((msg) => {
 
     if (msg.setting === "gifBehavior") {
         settings.gifBehavior = msg.value;
-        settings.removeGifs  = (msg.value === 'remove');
         applyGifSetting();
     }
 
