@@ -962,3 +962,36 @@ footer {
   .sp-list { border-right: none; }
   .sp-foot { flex-wrap: wrap; }
 }
+
+/* ── Server storage ── */
+.storage-section .field-desc { margin-bottom: 12px; }
+.storage-title {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+.storage-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 14px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11px;
+}
+.storage-table td { padding: 4px 0; border-bottom: 1px solid var(--border); }
+.storage-table td:first-child { color: var(--muted); }
+.storage-table td:not(:first-child) { text-align: right; font-variant-numeric: tabular-nums; }
+.storage-table:empty { display: none; }
+
+/* ── Server check (validation) ── */
+.validate-list {
+  list-style: none;
+  margin-top: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.validate-list:empty { display: none; }
+.validate-list li { padding: 6px 0 6px 14px; border-top: 1px solid var(--border); position: relative; overflow-wrap: anywhere; }
+.validate-list li::before { content: "•"; position: absolute; left: 0; }
+.validate-list li.err  { color: var(--error); }
+.validate-list li.warn { color: var(--warn); }

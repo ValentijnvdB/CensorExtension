@@ -4,7 +4,7 @@
 //
 // appState = {
 //   version:  2,
-//   baseUrl, process,
+//   baseUrl,
 //   general:  flat general settings     (absent → taken from the server)
 //   defaults: flat default censor box   (absent → taken from the server)
 //   models: {

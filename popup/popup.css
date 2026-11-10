@@ -279,3 +279,45 @@ select:focus { border-color: var(--accent); }
 }
 
 .settings-link:hover { color: var(--accent); border-color: var(--accent); }
+
+/* ── Server status ── */
+.server-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -4px 0 14px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.dot {
+  flex-shrink: 0;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.dot.ok      { background: #4ade80; box-shadow: 0 0 6px #4ade80; }
+.dot.warn    { background: #fb923c; box-shadow: 0 0 6px #fb923c; }
+.dot.fail    { background: #f87171; box-shadow: 0 0 6px #f87171; }
+.dot.testing { background: var(--accent); animation: pulse 0.8s infinite alternate; }
+@keyframes pulse { from { opacity: 1; } to { opacity: 0.3; } }
+
+/* ── Config error banner ── */
+.config-error {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid #f87171;
+  border-radius: 3px;
+  background: rgba(248,113,113,0.08);
+  font-size: 11px;
+  line-height: 1.4;
+}
+.config-error.hidden { display: none; }
+.config-error-title { font-family: var(--font-mono); font-weight: 600; color: #f87171; }
+.config-error-text  { overflow-wrap: anywhere; user-select: text; }
+.config-error-note  { color: var(--muted); }
+.config-error-link  { color: var(--accent); cursor: pointer; text-decoration: underline; align-self: flex-start; }

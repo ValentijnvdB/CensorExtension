@@ -26,6 +26,7 @@ const BOX_DEFAULTS = {
   shape:               "default",
   width_area_safety:   0.1,
   height_area_safety:  0.1,
+  time_safety:         0.0,   // videos only: seconds the censor stays after the last detection
   border:              false,
   border_thickness:    2,
   border_color:        "#ff0000",
@@ -127,6 +128,7 @@ function toBackendBox(flat) {
     shape:              f.shape,
     width_area_safety:  f.width_area_safety,
     height_area_safety: f.height_area_safety,
+    time_safety:        f.time_safety,
     border:  f.border ? { color: hexToRgb(f.border_color), thickness: f.border_thickness } : null,
     overlay: overlays[f.overlay_type] ?? null,
     inverse: f.inverse,
@@ -151,7 +153,7 @@ function fromBackendBox(box) {
     if (style.type === "debug" && style.color    !== undefined) flat.debug_color   = rgbToHex(style.color);
   }
 
-  for (const key of ["min_probability", "width_area_safety", "height_area_safety", "inverse"]) {
+  for (const key of ["min_probability", "width_area_safety", "height_area_safety", "time_safety", "inverse"]) {
     if (box[key] !== undefined && box[key] !== null) flat[key] = box[key];
   }
   if (SHAPES.includes(box.shape)) flat.shape = box.shape;

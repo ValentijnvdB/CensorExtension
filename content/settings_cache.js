@@ -7,9 +7,15 @@
 const cachedSettings = new Map();
 const settingsChangeListeners = [];
 
+// Set when the server rejected our config (invalid_config / config_not_allowed);
+// requests then go without a config, so the server uses its own, until the
+// settings change.
+let configRejected = false;
+
 browser.storage.onChanged.addListener((changes, area) => {
   if (area === "local" && (changes.appState || changes[BACKEND_INFO_KEY])) {
     cachedSettings.clear();
+    configRejected = false;
     for (const listener of settingsChangeListeners) listener();
   }
 });
@@ -36,4 +42,32 @@ function getCensorSettings(media = "image") {
     cachedSettings.set(media, pending);
   }
   return cachedSettings.get(media);
+}
+
+/**
+ * The config to send with a request for `media`: the user's settings, or
+ * null (server's own config) when the server rejected them.
+ */
+async function getRequestConfig(media = "image") {
+  return configRejected ? null : getCensorSettings(media);
+}
+
+const CONFIG_ERROR_CODES = new Set(["invalid_config", "config_not_allowed"]);
+
+/** True when `err` (an ApiError) means the server rejected the config. */
+function isConfigError(err) {
+  return CONFIG_ERROR_CODES.has(err?.code);
+}
+
+/**
+ * Remembers that the server rejected the config, so the following requests
+ * use the server's config, and stores the error for the popup and options page.
+ */
+function rejectConfig(err) {
+  if (configRejected) return;
+  configRejected = true;
+  console.warn("[Censor] The server rejected the censor settings, using its own:", err.message);
+  browser.storage.local.set({
+    [CONFIG_ERROR_KEY]: { code: err.code, error: err.message, at: Date.now() },
+  }).catch(() => {});
 }

@@ -64,13 +64,6 @@
         </div>
       </div>
 
-      <hr class="divider" />
-
-      <div class="connection-field">
-        <label for="process">Process endpoint</label>
-        <p class="field-desc">Path that receives the image POST request.</p>
-        <input type="text" id="process" placeholder="/censor_image_url" spellcheck="false" />
-      </div>
     </div>
   </div>
 
@@ -92,6 +85,15 @@
         anything without saved settings starts from the server's censor config.
       </p>
       <button class="btn-small" id="btnResetGeneral">Reset general &amp; defaults to server</button>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <p class="card-label">Server check</p>
+      <div class="status-row" style="margin-top:0">
+        <span class="dot" id="validateDot"></span>
+        <span class="status-text" id="validateStatus">not checked</span>
+      </div>
+      <ul class="validate-list" id="validateList"></ul>
     </div>
 
     <div class="card" style="margin-top:16px">
@@ -138,12 +140,35 @@
   <!-- ── Advanced tab ── -->
   <div class="tab-panel" id="panel-advanced">
     <div class="card">
-      <p class="card-label">Cache</p>
-      <p class="field-desc" style="margin-bottom:16px">
-        Clear the server-side detection cache.
-        Will need to rerun the models on all images.
-      </p>
-      <button class="btn-reset-cache" id="btnResetCache">Reset Cache</button>
+      <div class="profile-row">
+        <p class="card-label" style="margin-bottom:0">Server storage</p>
+        <button class="btn-small" id="btnRefreshStorage">Refresh</button>
+      </div>
+      <div class="status-row" style="margin-bottom:16px">
+        <span class="dot" id="storageDot"></span>
+        <span class="status-text" id="storageStatus">not loaded</span>
+      </div>
+
+      <div class="storage-section">
+        <p class="storage-title">Detection cache</p>
+        <p class="field-desc">
+          Model results the server keeps, so images and videos it saw before are censored faster.
+          After clearing it, the models run again on every image.
+        </p>
+        <table class="storage-table"><tbody id="cacheTable"></tbody></table>
+        <button class="btn-reset-cache" id="btnClearCache">Clear detection cache</button>
+      </div>
+
+      <hr class="divider" />
+
+      <div class="storage-section">
+        <p class="storage-title">Stored files</p>
+        <p class="field-desc" id="storageDesc">
+          Originals and censored images the server keeps in data/server/.
+        </p>
+        <table class="storage-table"><tbody id="storageTable"></tbody></table>
+        <button class="btn-reset-cache" id="btnClearStorage">Clear stored files</button>
+      </div>
     </div>
   </div>
 

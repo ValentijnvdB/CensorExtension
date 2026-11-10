@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Image Censor Extension",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Replaces page images with censored versions.",
 
   "permissions": [
@@ -41,7 +41,8 @@
   "web_accessible_resources": [
     "content/filters.json",
     "assets/removed.gif",
-    "assets/loading.png"
+    "assets/loading.png",
+    "assets/failed_screen.png"
   ],
 
   "browser_action": {

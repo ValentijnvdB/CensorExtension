@@ -10,13 +10,13 @@ It was created and tested for Firefox and Firefox-derived browsers. Chrome suppo
 ## Installation
 Before you start, you need a backend that can censor the images. 
 This extension was build to be used in combination with [CensorTool](https://github.com/ValentijnvdB/CensorTool).
-However, the endpoints are configurable, so in principle it could be used with others.
 
 1. Download the latest release from the release tab.
 2. Go to the 'Manage Extension Page' (Hamburger menu on the top right → Extensions and Themes)
 3. Install the extension: cog-wheel → Install add-on from file
 4. Configure your preferences: click the three dots → Preferences
-5. If you use a self-signed certificate, go to the *connection* tab and test the connection. If it fails, follow the instructions.
+5. Go to the *connection* tab and test the connection (`GET /health`). If you use a self-signed certificate and
+   it fails, follow the instructions.
 
 
 ## Configuration
@@ -34,9 +34,17 @@ is running (`GET /profile`), so any YOLO model (v8 or newer) the server loads ca
 
 The settings follow CensorTool's [censor config](https://github.com/ValentijnvdB/CensorTool) (`censor_config.md`).
 The same settings are used for images, GIFs and real-time video censoring.
-Requires a CensorTool version with the `/profile` and `/censor_config` endpoints and a `/censor_frame` WebSocket
-that accepts a config. Settings of earlier versions
+Requires a CensorTool version with the `/profile`, `/censor_config`, `/censor_images`, `/health`, `/cache` and
+`/storage` endpoints and a `/censor_frame` WebSocket that accepts a config. Settings of earlier versions
 of the extension are not migrated.
+
+- *Server check* on the config tab sends the settings to `POST /censor_config/validate` after every change and
+  lists the server's errors and warnings. When the server rejects the settings, pages use the server's own
+  censor config instead, and the popup shows a warning.
+- The *Images* tab of the popup sets how images are sent: several per request (`POST /censor_images`), downloaded
+  by the server for public images (the browser still downloads images the server can't get, e.g. ones that need
+  a login), and returned as a URL on the server or as base64.
+- The *Advanced* tab shows and clears the server's detection cache and stored files.
 
 
 ## Planned

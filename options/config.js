@@ -3,18 +3,158 @@
 //             shared.js (state, $, deepClone, saveState)
 
 
-async function resetCache() {
-  const url = state.baseUrl.replace(/\/$/, "");
+// ── Server storage (Advanced tab) ─────────────────────────────────────────────
+// Depends on: backend_api.js (fetchCacheInfo, fetchStorageInfo, clearCache, clearStorage, formatBytes)
+
+const serverUrl = () => state.baseUrl.replace(/\/$/, "");
+
+function setStorageStatus(kind, text) {
+  $("storageDot").className    = `dot ${kind}`;
+  $("storageStatus").className = `status-text ${kind === "testing" ? "" : kind}`;
+  $("storageStatus").textContent = text;
+}
+
+/** Fills a <tbody> with [name, files, bytes] rows. */
+function fillStorageTable(tbody, rows) {
+  tbody.innerHTML = "";
+  for (const [name, files, bytes] of rows) {
+    const tr = tbody.insertRow();
+    tr.insertCell().textContent = name;
+    tr.insertCell().textContent = `${files} file${files === 1 ? "" : "s"}`;
+    tr.insertCell().textContent = formatBytes(bytes);
+  }
+}
+
+async function refreshStorage() {
+  setStorageStatus("testing", "loading…");
+  const [cache, storage] = await Promise.allSettled([
+    fetchCacheInfo(serverUrl()),
+    fetchStorageInfo(serverUrl()),
+  ]);
+
+  fillStorageTable($("cacheTable"),
+      cache.status === "fulfilled" ? [["cache/server", cache.value.files, cache.value.bytes]] : []);
+
+  if (storage.status === "fulfilled") {
+    const st = storage.value;
+    fillStorageTable($("storageTable"), [
+      ...Object.entries(st.folders ?? {}).sort().map(([name, f]) => [name, f.files ?? 0, f.bytes ?? 0]),
+      ["total", st.files ?? 0, st.bytes ?? 0],
+    ]);
+    const hours = st.retention_hours;
+    $("storageDesc").textContent =
+        `Originals and censored images the server keeps in ${st.server_dir ?? "data/server"}/. ` +
+        (hours === 0 ? "Files are kept forever."
+                     : `A file is removed once it has not been used for ${hours ?? 24} hours.`);
+  } else {
+    fillStorageTable($("storageTable"), []);
+  }
+
+  const failed = [cache, storage].filter(r => r.status === "rejected");
+  $("btnClearCache").disabled   = cache.status   === "rejected";
+  $("btnClearStorage").disabled = storage.status === "rejected";
+  if (!failed.length) {
+    setStorageStatus("ok", `updated ${new Date().toLocaleTimeString()}`);
+  } else {
+    const err = failed[0].reason;
+    setStorageStatus(failed.length === 2 ? "fail" : "warn",
+        err?.status === 404 ? "the server has no /cache or /storage — is the backend up to date?"
+                            : (err?.message ?? "failed to load"));
+  }
+}
+
+async function runClear(action, what) {
   try {
-    const res = await fetch(`${url}${CONNECTION_DEFAULTS.reset_cache}`, { method: "GET", cache: "no-store" });
-    const data = await res.json();
-    if (res.ok && data.status === "success") {
-      showToast("Reset cache successfully", "saved");
+    const res = await action(serverUrl());
+    showToast(`Cleared ${what}: ${res.deleted_files ?? 0} files, ${formatBytes(res.deleted_bytes)}`, "saved");
+  } catch (err) {
+    showToast(`Failed to clear ${what}: ${err.message}`, "err");
+  }
+  await refreshStorage();
+}
+
+$("btnRefreshStorage").addEventListener("click", refreshStorage);
+$("btnClearCache").addEventListener("click", () => runClear(clearCache, "detection cache"));
+$("btnClearStorage").addEventListener("click", () => {
+  if (!confirm("Remove the files the server keeps?\n\n" +
+               "Censored images that open pages still show will no longer load until the page is reloaded.")) return;
+  runClear(clearStorage, "stored files");
+});
+// Load the numbers when the tab is opened.
+document.querySelector('.tab[data-tab="advanced"]').addEventListener("click", refreshStorage);
+
+// ── Server check (POST /censor_config/validate) ──────────────────────────────
+// Runs after every save, so problems the extension can't see on its own
+// (labels no model produces, shape: mask on a detect model, ...) show up
+// straight away. Settings are still saved when invalid: the content scripts
+// then fall back to the server's censor config.
+
+let validateTimer      = null;
+let validateController = null;
+
+function setValidateStatus(kind, text) {
+  $("validateDot").className    = `dot ${kind}`;
+  $("validateStatus").className = `status-text ${kind === "testing" ? "" : kind}`;
+  $("validateStatus").textContent = text;
+}
+
+function showValidateMessages(errors, warnings) {
+  const list = $("validateList");
+  list.innerHTML = "";
+  for (const [cls, msgs] of [["err", errors], ["warn", warnings]]) {
+    for (const msg of msgs) {
+      const li = document.createElement("li");
+      li.className = cls;
+      li.textContent = msg;
+      list.appendChild(li);
+    }
+  }
+}
+
+/** Validates the current settings shortly after the last change. */
+function scheduleValidation() {
+  clearTimeout(validateTimer);
+  validateTimer = setTimeout(runValidation, 400);
+}
+
+async function runValidation() {
+  validateController?.abort();
+  const controller = validateController = new AbortController();
+
+  const profile = backendInfo?.profile;
+  if (!profile || backendInfo.offline || !state.general || !state.defaults) {
+    setValidateStatus("", "not checked — backend unreachable");
+    showValidateMessages([], []);
+    return;
+  }
+
+  setValidateStatus("testing", "checking…");
+  try {
+    // Image and video configs only differ in enable_overlays; check both.
+    const results = await Promise.all(["image", "video"].map(media =>
+        validateCensorConfig(serverUrl(), buildCensorConfig(state, profile, serverCensorConfig(), media),
+                             { signal: controller.signal })));
+    if (controller !== validateController) return;
+
+    const unique   = key => [...new Set(results.flatMap(r => r[key]))];
+    const errors   = unique("errors");
+    const warnings = unique("warnings");
+    const valid    = results.every(r => r.valid);
+
+    showValidateMessages(errors, warnings);
+    if (!valid) {
+      setValidateStatus("fail", "rejected by the server — pages use the server's censor config instead");
+    } else if (warnings.length) {
+      setValidateStatus("warn", `accepted, with ${warnings.length} warning${warnings.length === 1 ? "" : "s"}`);
     } else {
-      showToast(`Failed to reset cache: ${data.message ?? res.statusText}`, "err");
+      setValidateStatus("ok", "accepted by the server");
     }
   } catch (err) {
-    showToast(`Failed to reset cache: ${err.message}`, "err");
+    if (err.name === "AbortError" || controller !== validateController) return;
+    showValidateMessages([], []);
+    setValidateStatus("warn", err.status === 404
+        ? "not checked — the server has no /censor_config/validate"
+        : `not checked — ${err.message}`);
   }
 }
 
@@ -283,6 +423,8 @@ function buildConfigFields(container, cfg, onChange, clipLabels = profileLabels(
   spoiler.appendChild(makeFloat(`min_probability-${pfx}`, "Min probability", cfg.min_probability, 0, 1, set("min_probability")));
   spoiler.appendChild(makeFloat(`width_area_safety-${pfx}`, "Width area safety", cfg.width_area_safety, null, null, set("width_area_safety")));
   spoiler.appendChild(makeFloat(`height_area_safety-${pfx}`, "Height area safety", cfg.height_area_safety, null, null, set("height_area_safety")));
+  spoiler.appendChild(makeFloat(`time_safety-${pfx}`, "Time safety (s)", cfg.time_safety, 0, null, set("time_safety")));
+  spoiler.appendChild(makeNote("Videos only: keep the censor on screen this many seconds after the feature was last detected."));
   spoiler.appendChild(makeMultiCheck(`clip_to-${pfx}`, "Clip to", clipLabels, cfg.clip_to, set("clip_to")));
   container.appendChild(spoiler);
 

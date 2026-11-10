@@ -1,9 +1,7 @@
 // Depends on: common/censor_schema.js, common/backend_api.js, common/model_config.js
 
 const CONNECTION_DEFAULTS = {
-  baseUrl:      "https://localhost:8443",
-  process:      "/censor_image",
-  reset_cache:  "/reset_cache"
+  baseUrl: "https://localhost:8443",
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -60,6 +58,9 @@ function warnAfterSave(msg) {
 async function saveState({ silent = false } = {}) {
   try {
     await browser.storage.local.set({ appState: serializeState() });
+    // A config error reported by a page was about the previous settings.
+    await browser.storage.local.remove(CONFIG_ERROR_KEY);
+    scheduleValidation();
     const warning = pendingSaveWarning;
     pendingSaveWarning = null;
     if (warning)      showToast(warning, "warn");
@@ -79,6 +80,7 @@ async function loadState() {
     }
   } catch { /* use defaults */ }
 
+  delete state.process;   // the process endpoint is no longer configurable
   if (state.general) state.general = normalizeGeneral(state.general);
   state.models ??= {};
   for (const cfg of Object.values(state.models)) {
@@ -172,6 +174,7 @@ async function refreshBackend() {
   setProfileStatus("testing", "loading profile…");
   await syncWithBackend();
   buildConfigTab();
+  scheduleValidation();
 }
 
 // Wait for the other scripts of the page (connection.js, config.js, ...).

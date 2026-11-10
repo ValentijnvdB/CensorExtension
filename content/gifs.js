@@ -49,7 +49,9 @@ function handleGif(img, src) {
 
 /**
  * Called by the image pipeline when an image without a .gif URL turned out
- * to be a GIF. The load behavior is already applied and `blob` downloaded.
+ * to be a GIF. The load behavior is already applied. `blob` is the downloaded
+ * GIF, or null when the server found out (use_censor_video) and the browser
+ * has not downloaded it.
  */
 function handleDetectedGif(img, src, blob) {
     gifImgs.add(img);
@@ -76,31 +78,45 @@ function removeGif(img, src) {
  * Sends the GIF to /censor_video and shows the result in place of `img`.
  * Without `blob` the GIF is downloaded and the load behavior applied first;
  * with `blob` (handed over by the image pipeline) both are already done.
+ * When the server rejects the censor config, the GIF is sent again with the
+ * server's own config (see settings_cache.js).
  */
 async function censorGif(img, src, blob = null) {
     const controller = new AbortController();
     gifRequests.set(img, { controller, src });
     inFlight.add(img);
-    if (!blob) applyLoadBehavior(img);
+    if (!blob) applyLoadBehavior(img);   // applying it twice (null from the pipeline) is harmless
 
     try {
         blob ??= await fetchBlob(src, controller.signal);
-        const config   = await getCensorSettings("video");
         const filename = gifFilename(src);
 
-        // `filename` must come before `video` (see the backend's http_api.md).
-        const form = new FormData();
-        form.append("filename", filename);
-        form.append("format", "gif");
-        form.append("video", blob, filename);
-        if (config) form.append("config", JSON.stringify(config));
+        let response;
+        for (;;) {
+            const config = await getRequestConfig("video");
 
-        const response = await fetch(`${BASE_URL}/censor_video`, {
-            method: "POST",
-            body:   form,
-            signal: controller.signal,
-        });
-        if (!response.ok) throw new Error(`Server responded with ${response.status}`);
+            // `filename` must come before `video` (see the backend's http_api.md).
+            const form = new FormData();
+            form.append("filename", filename);
+            form.append("format", "gif");
+            form.append("video", blob, filename);
+            if (config) form.append("config", JSON.stringify(config));
+
+            response = await fetch(`${BASE_URL}/censor_video`, {
+                method: "POST",
+                body:   form,
+                signal: controller.signal,
+            });
+            if (response.ok) break;
+
+            const err = await readApiError(response);
+            if (config && isConfigError(err)) {
+                rejectConfig(err);
+                continue;
+            }
+            if (FAILED_CODES.has(err.code)) showFailed(img);
+            throw err;
+        }
 
         const dataUrl = await readBlobAsDataUrl(await response.blob());
         if (controller.signal.aborted) return;

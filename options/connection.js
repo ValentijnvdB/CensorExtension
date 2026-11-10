@@ -1,22 +1,17 @@
 // ── Connection tab ────────────────────────────────────────────────────────────
-// Depends on: shared.js (state, CONNECTION_DEFAULTS, $, saveState, showToast)
+// Depends on: shared.js (state, $, saveState, showToast, refreshBackend)
+//             backend_api.js (fetchHealth)
 
 function initConnectionTab() {
-  $("baseUrl").value     = state.baseUrl;
-  $("process").value = state.process;
+  $("baseUrl").value = state.baseUrl;
 
   $("baseUrl").addEventListener("blur", () => {
     state.baseUrl = $("baseUrl").value.trim().replace(/\/$/, "");
     saveState();
   });
-  $("process").addEventListener("blur", () => {
-    state.process = $("process").value.trim() || CONNECTION_DEFAULTS.process;
-    saveState();
-  });
 
   $("btnTest").addEventListener("click", runTest);
   $("btnSave").addEventListener("click", handleSave);
-  $("btnResetCache").addEventListener("click", resetCache);
 
   $("btnTrust").addEventListener("click", () => {
     const target = $("btnTrust").dataset.url;
@@ -41,39 +36,47 @@ function initConnectionTab() {
   });
 }
 
-async function runTest() {
-  const url            = $("baseUrl").value.trim().replace(/\/$/, "");
-  const connectionPath = "/assets/connection_test.png";
-  const dot            = $("dot");
-  const text           = $("statusText");
-  const banner         = $("certBanner");
+/** "3725.4" → "1h 2m" */
+function formatUptime(seconds) {
+  const s = Math.floor(seconds ?? 0);
+  if (s < 60) return `${s}s`;
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+}
 
-  dot.className    = "dot testing";
-  text.className   = "status-text";
-  text.textContent = "testing…";
+async function runTest() {
+  const url    = $("baseUrl").value.trim().replace(/\/$/, "");
+  const dot    = $("dot");
+  const text   = $("statusText");
+  const banner = $("certBanner");
+
+  const setStatus = (kind, msg) => {
+    dot.className    = `dot ${kind}`;
+    text.className   = `status-text ${kind === "testing" ? "" : kind}`;
+    text.textContent = msg;
+  };
+
+  setStatus("testing", "testing…");
   banner.classList.remove("visible", "trusted");
 
-  try {
-    const res = await fetch(`${url}${connectionPath}`, { method: "HEAD", cache: "no-store" });
-    if (res.ok) {
-      dot.className    = "dot ok";
-      text.className   = "status-text ok";
-      text.textContent = `reachable — ${res.status} ${res.statusText}`;
-    } else {
-      throw new Error(`${res.status} ${res.statusText}`);
-    }
-  } catch (err) {
-    const isHttps    = url.toLowerCase().startsWith("https://");
-    const isCertLike = err instanceof TypeError && isHttps;
-    dot.className    = "dot " + (isCertLike ? "warn" : "fail");
-    text.className   = "status-text " + (isCertLike ? "warn" : "fail");
-    text.textContent = isCertLike
-      ? "certificate not trusted — see below"
-      : (err.message || "unreachable");
-    if (isCertLike) {
-      $("btnTrust").dataset.url = `${url}${connectionPath}`;
-      banner.classList.add("visible");
-    }
+  const { reachable, ok, health, error } = await fetchHealth(url);
+
+  if (ok) {
+    setStatus("ok", `ready — profile ${health.profile ?? "?"}, ${health.backend ?? "?"} backend, ` +
+                    `up ${formatUptime(health.uptime_seconds)}`);
+  } else if (reachable && health) {
+    setStatus("warn", `reachable, but the pipeline is not running (profile ${health.profile ?? "?"})`);
+  } else if (reachable && error.status === 404) {
+    setStatus("warn", "reachable, but the server has no /health — is the backend up to date?");
+  } else if (reachable) {
+    setStatus("fail", error.message);
+  } else if (url.toLowerCase().startsWith("https://")) {
+    // fetch() gives no details; with https a missing certificate exception is the usual cause.
+    setStatus("warn", "certificate not trusted (or server down) — see below");
+    $("btnTrust").dataset.url = `${url}/health`;
+    banner.classList.add("visible");
+  } else {
+    setStatus("fail", error.message || "unreachable");
   }
 }
 
@@ -85,8 +88,7 @@ async function handleSave() {
     return;
   }
   $("baseUrl").classList.remove("error");
-  state.baseUrl     = baseUrl;
-  state.process = $("process").value.trim() || CONNECTION_DEFAULTS.process;
+  state.baseUrl = baseUrl;
   await saveState();
   await refreshBackend();
 }

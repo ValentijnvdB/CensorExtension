@@ -12,6 +12,20 @@
       <span class="version" id="version"></span>
     </header>
 
+    <!-- Server status (GET /health) -->
+    <div class="server-status" id="serverStatus" title="">
+      <span class="dot testing" id="serverDot"></span>
+      <span class="server-text" id="serverText">checking server…</span>
+    </div>
+
+    <!-- Shown when a page reported that the server rejected the censor settings -->
+    <div class="config-error hidden" id="configError">
+      <span class="config-error-title">Censor settings rejected</span>
+      <span class="config-error-text" id="configErrorText"></span>
+      <span class="config-error-note">Pages use the server's own censor config until the settings are fixed.</span>
+      <a class="config-error-link" id="configErrorLink">Open settings</a>
+    </div>
+
     <!-- Master switch — always visible -->
     <div class="section-label">Master switch</div>
     <div class="settings-list master-list">
@@ -29,6 +43,7 @@
     <!-- Tab bar -->
     <div class="tab-bar">
       <button class="tab-btn active" data-tab="quick">Quick</button>
+      <button class="tab-btn" data-tab="images">Images</button>
       <button class="tab-btn" data-tab="video">Video</button>
     </div>
 
@@ -69,6 +84,44 @@
             <option value="placeholder">Placeholder</option>
             <option value="blur">Blur</option>
             <option value="pixelate">Pixelate</option>
+          </select>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Images tab -->
+    <div class="tab-panel hidden" id="tab-images">
+      <div class="settings-list">
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Batch requests</span>
+            <span class="setting-desc">Send several images per request</span>
+          </div>
+          <button class="toggle" id="toggle-batchImages" role="switch" aria-checked="false">
+            <span class="thumb"></span>
+          </button>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Server downloads</span>
+            <span class="setting-desc">Let the server download public images; the browser still downloads the ones it can't get</span>
+          </div>
+          <button class="toggle" id="toggle-serverFetch" role="switch" aria-checked="false">
+            <span class="thumb"></span>
+          </button>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting-info">
+            <span class="setting-name">Response</span>
+            <span class="setting-desc">URL: the page loads the censored image from the server. Base64: it comes with the answer</span>
+          </div>
+          <select id="select-imageResponse">
+            <option value="url">URL</option>
+            <option value="base64">Base64</option>
           </select>
         </div>
 
@@ -141,6 +194,7 @@
       Full settings
     </a>
   </div>
+  <script src="../common/backend_api.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

@@ -6,7 +6,7 @@
  *   1. removeVideos: replaces <video> elements with a static placeholder clip.
  *
  *   2. censorVideos: intercepts <video> elements, sends frames over a WebSocket
- *      to wss://localhost:8443/censor_video, and displays the censored frames
+ *      to <base URL>/censor_frame (ws:// or wss://), and displays the censored frames
  *      on a <canvas> in place of the video.
  *
  * The two features are mutually exclusive. Enabling one will disable the other.

@@ -15,16 +15,15 @@ Promise.all([
     readConnectionSettings(),
     loadFilters(),
 ]).then(([stored, connection, filters]) => {
-    BASE_URL  = connection.baseUrl.replace(/\/$/, "");
-    ENDPOINTS = {
-        process: `${BASE_URL}${connection.process}`,
-        loading: browser.runtime.getURL("assets/loading_image.png"),
-    };
+    BASE_URL = connection.baseUrl.replace(/\/$/, "");
 
     settings.extensionEnabled = stored.extensionEnabled;
     settings.loadBehavior     = stored.loadBehavior;
     settings.gifBehavior      = stored.gifBehavior;
     settings.videoBehavior    = stored.videoBehavior;
+    settings.batchImages      = stored.batchImages;
+    settings.serverFetch      = stored.serverFetch;
+    settings.imageResponse    = stored.imageResponse;
 
     // Bool aliases used by videos.js.
     settings.removeVideos = stored.videoBehavior === 'remove';
@@ -73,6 +72,11 @@ browser.runtime.onMessage.addListener((msg) => {
     if (msg.setting === "loadBehavior") {
         settings.loadBehavior = msg.value;
     }
+
+    // Image requests: apply to the next requests.
+    if (msg.setting === "batchImages")   settings.batchImages   = msg.value;
+    if (msg.setting === "serverFetch")   settings.serverFetch   = msg.value;
+    if (msg.setting === "imageResponse") settings.imageResponse = msg.value;
 
     // Video pipeline config
     if (msg.setting === "videoPrebufferSeconds") videoPrebufferSeconds = msg.value;

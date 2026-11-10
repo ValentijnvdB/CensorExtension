@@ -6,8 +6,7 @@
  */
 
 const DEFAULTS = {
-    baseUrl:     "https://localhost:8443",
-    process: "/censor_image",
+    baseUrl: "https://localhost:8443",
 };
 
 const SETTING_DEFAULTS = {
@@ -15,6 +14,10 @@ const SETTING_DEFAULTS = {
     gifBehavior:           'remove',  // 'nothing' | 'remove' | 'censor'
     videoBehavior:         'remove',  // 'nothing' | 'remove' | 'censor'
     loadBehavior:          'blur',
+    // Image requests (popup → Images tab)
+    batchImages:           true,      // several images per request (POST /censor_images)
+    serverFetch:           true,      // let the server download public images (type: source)
+    imageResponse:         'url',     // 'url' (served from /censored/<name>) | 'base64'
     // Video config (previously hard-coded)
     videoPrebufferSeconds: 10,
     videoTargetFps:        10,
@@ -46,7 +49,6 @@ let videoPrebufferSeconds = SETTING_DEFAULTS.videoPrebufferSeconds;
 let videoTargetFps = SETTING_DEFAULTS.videoTargetFps;
 
 // Populated once storage + filters are both ready.
-let ENDPOINTS = null;
 let BASE_URL  = null;
 
 // Quick settings — updated live via messages from the popup.
@@ -64,21 +66,15 @@ let initReady    = false;
 const processed = new WeakSet();
 const inFlight  = new WeakSet();
 
-let pendingBatch   = [];
-let batchScheduled = false;
-
 /**
- * Reads the connection settings (base URL + process endpoint) saved by the
- * options page in browser.storage.local (appState), falling back to DEFAULTS.
+ * Reads the connection settings (base URL) saved by the options page in
+ * browser.storage.local (appState), falling back to DEFAULTS.
  */
 async function readConnectionSettings() {
     try {
         const { appState } = await browser.storage.local.get({ appState: null });
         const saved = appState ? JSON.parse(appState) : {};
-        return {
-            baseUrl: saved.baseUrl || DEFAULTS.baseUrl,
-            process: saved.process || DEFAULTS.process,
-        };
+        return { baseUrl: saved.baseUrl || DEFAULTS.baseUrl };
     } catch {
         return { ...DEFAULTS };
     }
