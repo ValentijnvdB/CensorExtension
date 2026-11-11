@@ -56,8 +56,8 @@ class VideoPipeline {
         // VideoCapture: extracts frames from the hidden source.
         this._capture = new VideoCapture(
             source,
-            (frameNum, captureTime, stepping, bytes, seekId) => {
-                this._renderer.recordFrameDispatch(frameNum, captureTime, stepping);
+            (frameNum, captureTime, bytes, seekId) => {
+                this._renderer.recordFrameDispatch(frameNum, captureTime);
                 videoWsSend(this._id, seekId, frameNum, bytes);
             },
             () => this._renderer.isBufferFull(),
@@ -65,10 +65,12 @@ class VideoPipeline {
         );
 
         // VideoRenderer: displays censored frames, manages audio.
-        this._renderer = new VideoRenderer(source, this._canvas, () => {
+        this._renderer = new VideoRenderer(source, this._canvas,
             // Called when the renderer enters BUFFERING and needs frames.
-            this._capture.start();
-        });
+            () => this._capture.start(),
+            // The buffer ran dry: what is still in flight is behind the playhead.
+            () => this._flush(),
+        );
 
         // Register with the shared WS.
         videoWsRegister(this._id, {
@@ -210,11 +212,19 @@ class VideoPipeline {
         // or from the audio-sync nudge.
         if (this._renderer?.internalPlayback) return;
 
-        // A real user seek: tell the backend to cancel all in-flight work for
-        // the current (now stale) seekId before we increment it.
+        this._flush();
+    }
+
+    /**
+     * Drop every frame of the current seekId (queued, at the backend, and
+     * buffered) and rebuffer from the source's position. For a user seek and
+     * for starvation.
+     */
+    _flush() {
+        // Tell the backend to cancel all in-flight work for the current (now
+        // stale) seekId before the renderer increments it.
         videoWsCancel(this._id, this._renderer.seekId);
 
-        // Flush everything and rebuffer from the new position.
         this._capture.stop();
         this._capture.reset();
         this._renderer.onSeeked();

@@ -21,7 +21,7 @@ const SETTING_DEFAULTS = {
     // Video config (previously hard-coded)
     videoPrebufferSeconds: 10,
     videoTargetFps:        10,
-    videoMaxInFlight:      128,
+    videoMaxInFlight:      12,
     videoFrameFormat:      'webp',
     frameCompressionLevel: 0.5,
 };

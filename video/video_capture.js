@@ -24,17 +24,15 @@
  *   moment it is captured (getSeekId()); a frame whose seekId is stale by the
  *   time it is encoded is dropped instead of sent.
  *
- * Emits: onFrame(frameNum: number, captureTime: number, stepping: boolean, bytes: ArrayBuffer, seekId: number)
- *   captureTime is source.currentTime * 1000 at the moment of capture.
- *   stepping mirrors isStepping at capture time; the renderer uses it to
- *   identify frames whose captureTime is in video-time space (currentTime*1000)
- *   so it can rewrite them into performance.now() space at clock-sync time.
+ * Emits: onFrame(frameNum: number, captureTime: number, bytes: ArrayBuffer, seekId: number)
+ *   captureTime is the frame's media time in ms (the rVFC metadata's
+ *   mediaTime while playing, source.currentTime after a step seek).
  */
 
 class VideoCapture {
     /**
      * @param {HTMLVideoElement} sourceVideo
-     * @param {function(frameNum: number, captureTime: number, stepping: boolean, bytes: ArrayBuffer)} onFrame
+     * @param {function(frameNum: number, captureTime: number, bytes: ArrayBuffer, seekId: number)} onFrame
      * @param {function(): boolean} isBufferFull
      *   Returns true when the renderer's buffer has enough frames and capture
      *   should stop stepping. Only consulted in stepping mode — in playing mode
@@ -55,6 +53,8 @@ class VideoCapture {
         // rVFC / rAF state (playing mode)
         this._rafHandle     = null;
         this._lastVideoTime = -1;
+        // Media time (s) the next playing-mode capture is due; null = capture the next frame.
+        this._nextDue       = null;
 
         // Seek-step state (stepping mode)
         this._stepping        = false; // true while the seek-step loop is active
@@ -118,6 +118,7 @@ class VideoCapture {
         this._removeStepListener();
         this._inFlightCount = 0;
         this._lastVideoTime = -1;
+        this._nextDue       = null;
         this._stepping      = false;
         this._stepPending   = false;
         this._stepQueued    = false;
@@ -162,6 +163,7 @@ class VideoCapture {
 
     _enterPlayingMode() {
         this._stepping = false;
+        this._nextDue  = null;
         this._scheduleRvfc();
     }
 
@@ -186,13 +188,9 @@ class VideoCapture {
         this._rafHandle = null;
         if (!this._capturing) return;
 
-        const targetInterval = 1 / videoTargetFps;
-        const currentTime    = this._source.currentTime;
-
-        if (this._lastVideoTime === -1 || (currentTime - this._lastVideoTime) >= targetInterval) {
-            this._lastVideoTime = currentTime;
-            this._captureCurrentFrame();
-        }
+        // The presented frame's own time; currentTime may already be past it.
+        const t = metadata?.mediaTime ?? this._source.currentTime;
+        if (this._isDue(t)) this._captureCurrentFrame(t);
 
         if (this._inFlightCount < videoMaxInFlight) {
             this._scheduleRvfc();
@@ -203,13 +201,30 @@ class VideoCapture {
         this._rafHandle = null;
         if (!this._capturing) return;
         const vt = this._source.currentTime;
-        if (vt !== this._lastVideoTime) {
-            this._lastVideoTime = vt;
-            this._captureCurrentFrame();
-        }
+        if (vt !== this._lastVideoTime && this._isDue(vt)) this._captureCurrentFrame(vt);
         if (this._inFlightCount < videoMaxInFlight) {
             this._rafHandle = requestAnimationFrame(this._boundRafFallback);
         }
+    }
+
+    /**
+     * Whether a frame at media time t (s) should be captured, keeping to
+     * videoTargetFps on average. Captures are due on a fixed grid of
+     * 1/videoTargetFps; "at least 1/fps since the last capture" would round
+     * down to the source's frames (about 8 fps for a 24 or 25 fps source at 10).
+     */
+    _isDue(t) {
+        const interval = 1 / videoTargetFps;
+        // Start the grid here, also after a jump (a seek, or a stall longer than a frame).
+        if (this._nextDue === null || t < this._nextDue - 2 * interval || t > this._nextDue + 2 * interval) {
+            this._nextDue = t + interval;
+            return true;
+        }
+        if (t + 0.001 < this._nextDue) return false;
+        this._nextDue += interval;
+        // Never more than one capture behind (e.g. a source slower than the target).
+        if (this._nextDue <= t) this._nextDue = t + interval;
+        return true;
     }
 
     _cancelRafHandle() {
@@ -284,7 +299,7 @@ class VideoCapture {
                 return;
             }
 
-            this._captureCurrentFrame();
+            this._captureCurrentFrame(this._source.currentTime);
 
             // Schedule the next step (gated again by in-flight count).
             this._scheduleStep();
@@ -308,11 +323,12 @@ class VideoCapture {
 
     // ── Shared ────────────────────────────────────────────────────────────────
 
-    _captureCurrentFrame() {
+    /** Capture the frame the source shows now; `time` is its media time in seconds. */
+    _captureCurrentFrame(time) {
         const v = this._source;
         if (!v.videoWidth) return;
 
-        const captureTime = v.currentTime * 1000;
+        const captureTime = time * 1000;
         const frameNum    = this._frameNum++;
         const seekId      = this._getSeekId();
         this._lastVideoTime = v.currentTime;
@@ -337,7 +353,7 @@ class VideoCapture {
             blob.arrayBuffer().then(bytes => {
                 if (isStale()) return;
                 this._recordDispatch();
-                this._onFrame(frameNum, captureTime, true, bytes, seekId);
+                this._onFrame(frameNum, captureTime, bytes, seekId);
             });
         }, `image/${videoFrameFormat}`, frameCompressionLevel);
     }

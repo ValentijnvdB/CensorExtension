@@ -19,7 +19,9 @@
  *     captureTime are discarded. Frames with an equal or future captureTime
  *     are kept so late-arriving out-of-order frames are not prematurely dropped.
  *   - VideoCapture runs in rVFC mode.
- *   - Transitions back to BUFFERING when the buffer is empty (starvation).
+ *   - On starvation (empty buffer) it calls onStarved: the pipeline flushes
+ *     like a seek (new seekId, frames still in flight are dropped, they are
+ *     all behind the playhead) and the renderer rebuffers from here.
  *
  * User pause during PLAYING:
  *   - Source is already paused by the user; canvas freezes.
@@ -28,8 +30,8 @@
  *
  * Audio sync:
  *   The canvas follows source.currentTime — no nudging of currentTime needed.
- *   _tick() converts source.currentTime to the performance.now() timeline via
- *   a sync point set at playback start, then compares against captureTime.
+ *   Every frame's captureTime is its media time in ms, so _tick() compares it
+ *   with source.currentTime * 1000 directly.
  */
 
 const RendererState = Object.freeze({
@@ -39,25 +41,27 @@ const RendererState = Object.freeze({
 });
 
 class VideoRenderer {
-    constructor(sourceVideo, outputCanvas, onNeedFrames) {
+    /**
+     * @param {function()} onNeedFrames – entered BUFFERING: start capture
+     * @param {function()} onStarved    – the buffer ran dry while playing: flush (see header)
+     */
+    constructor(sourceVideo, outputCanvas, onNeedFrames, onStarved) {
         this._source       = sourceVideo;
         this._canvas       = outputCanvas;
         this._ctx          = outputCanvas.getContext("2d");
         this._onNeedFrames = onNeedFrames;
+        this._onStarved    = onStarved;
 
         this._state  = RendererState.IDLE;
         this._seekId = 0;
 
-        // frameNum → { bitmap: ImageBitmap, captureTime: number, stepping: boolean }
+        // frameNum → { bitmap: ImageBitmap, captureTime: number (media time, ms) }
         this._buffer = new Map();
 
         this._rafHandle = null;
 
-        // Metadata recorded at dispatch, looked up when the processed frame returns.
-        // frameNum → { captureTime: number (ms), stepping: boolean }
-        //   captureTime: performance.now() in playing mode,
-        //                source.currentTime*1000 in stepping mode.
-        //   stepping: true if captured during seek-step (prebuffer/paused).
+        // Media time (ms) recorded at dispatch, looked up when the processed frame returns.
+        // frameNum → captureTime
         this._captureTimeMap = new Map();
 
         this._prebufferFrames = 0;
@@ -76,13 +80,6 @@ class VideoRenderer {
         // stepping the source forward to fill the buffer, so on resume we seek
         // back here instead of continuing where capture got to.
         this._pausedAt = null;
-
-        // Clock sync point set when PLAYING starts. Used by _tick() to convert
-        // source.currentTime into the performance.now() timeline so it can be
-        // compared against captureTime (which is performance.now()-based in
-        // playing mode and source.currentTime*1000-based in stepping mode).
-        // { perfNow: number, videoTime: number } | null
-        this._clockSync = null;
     }
 
     // ── Public API ────────────────────────────────────────────────────────────
@@ -139,8 +136,8 @@ class VideoRenderer {
      * Record the captureTime for a frame at the moment it is dispatched to
      * the backend, so it is available when the processed frame returns.
      */
-    recordFrameDispatch(frameNum, captureTime, stepping) {
-        this._captureTimeMap.set(frameNum, { captureTime, stepping });
+    recordFrameDispatch(frameNum, captureTime) {
+        this._captureTimeMap.set(frameNum, captureTime);
     }
 
     /**
@@ -154,7 +151,7 @@ class VideoRenderer {
             return;
         }
 
-        const dispatch = this._captureTimeMap.get(frameNum);
+        const captureTime = this._captureTimeMap.get(frameNum) ?? 0;
         this._captureTimeMap.delete(frameNum);
 
         createImageBitmap(new Blob([bytes])).then(bitmap => {
@@ -166,21 +163,7 @@ class VideoRenderer {
                 return;
             }
 
-            let ct       = dispatch?.captureTime ?? 0;
-            const isStepping = dispatch?.stepping ?? false;
-
-            // If this is a stepping-mode frame and we already have a clock sync,
-            // rewrite its captureTime from video-time space (currentTime*1000)
-            // into performance.now() space so _tick() can compare it against
-            // playing-mode frames on a single timeline.
-            // We use the explicit `stepping` flag — no threshold heuristics.
-            if (isStepping && this._clockSync) {
-                const videoT = ct / 1000;
-                ct = this._clockSync.perfNow +
-                     (videoT - this._clockSync.videoTime) * 1000;
-            }
-
-            this._buffer.set(frameNum, { bitmap, captureTime: ct, stepping: isStepping });
+            this._buffer.set(frameNum, { bitmap, captureTime });
             if (this._state === RendererState.BUFFERING) {
                 this._checkPrebuffer();
             }
@@ -190,12 +173,14 @@ class VideoRenderer {
         });
     }
 
-    /** Called by VideoPipeline on a user-initiated seek. */
+    /**
+     * Called by VideoPipeline on a user-initiated seek, and on starvation:
+     * forget every frame (also those in flight) and rebuffer from here.
+     */
     onSeeked() {
         this._seekId++;
         this._pausedAt = null;
         this._captureTimeMap.clear();
-        this._clockSync = null;
         for (const [, { bitmap }] of this._buffer) bitmap.close();
         this._buffer.clear();
         this._stopPlaybackLoop();
@@ -258,7 +243,6 @@ class VideoRenderer {
 
     _enterBuffering() {
         this._state = RendererState.BUFFERING;
-        this._clockSync = null;
         this._stopPlaybackLoop();
         console.log(`[VideoCensor] → BUFFERING  videoTime=${this._source.currentTime.toFixed(3)}s`);
 
@@ -335,54 +319,17 @@ class VideoRenderer {
             this._source.play()
                 .then(() => {
                     this.internalPlayback = false;
-                    // Establish the sync point only once the browser's media
-                    // clock is actually running. Recording it before play()
-                    // resolves causes drift because currentTime hasn't started
-                    // moving yet.
-                    this._establishClockSync();
                 })
                 .catch((err) => {
                     this.internalPlayback = false;
                     console.warn("[VideoCensor] source.play() failed:", err);
                 });
         } else {
-            // Source is already playing — clock is running now.
+            // Source is already playing.
             this.internalPlayback = false;
-            this._establishClockSync();
         }
 
         this._startPlaybackLoop();
-    }
-
-    /**
-     * Record the (perfNow, videoTime) sync point and rewrite every
-     * stepping-mode captureTime in the buffer from video-time space
-     * (currentTime * 1000) into performance.now() space so all frames
-     * share a single comparable timeline before _tick() runs.
-     *
-     * All captureTime values are stored as currentTime * 1000 at capture time.
-     * A stepping frame at video position T seconds gets:
-     *   newCaptureTime = perfNow + (T - videoTime) * 1000
-     * which places it correctly relative to the current playback position on
-     * the perf timeline. Future frames (T > videoTime) get a future perf time;
-     * past frames (T < videoTime) get a past perf time.
-     */
-    _establishClockSync() {
-        const perfNow   = performance.now();
-        const videoTime = this._source.currentTime;
-        this._clockSync = { perfNow, videoTime };
-        console.log(`[VideoCensor] clockSync set  perfNow=${perfNow.toFixed(1)}ms  videoTime=${videoTime.toFixed(3)}s`);
-
-        // Rewrite any stepping-mode frames already in the buffer from video-time
-        // space (currentTime * 1000) into performance.now() space so all frames
-        // share a single comparable timeline before _tick() runs.
-        for (const [, entry] of this._buffer) {
-            if (entry.stepping) {
-                const videoT      = entry.captureTime / 1000;
-                entry.captureTime = perfNow + (videoT - videoTime) * 1000;
-                entry.stepping    = false;
-            }
-        }
     }
 
     // ── Playback loop ─────────────────────────────────────────────────────────
@@ -404,12 +351,7 @@ class VideoRenderer {
             this._rafHandle = null;
             if (this._state !== RendererState.PLAYING) return;
 
-            // Map source.currentTime into the performance.now() timeline using
-            // the sync point established when playback started. All captureTime
-            // values in the buffer have already been rewritten into this same
-            // perf space by _establishClockSync, so the comparison is valid.
-            const now = this._clockSync.perfNow +
-                (this._source.currentTime - this._clockSync.videoTime) * 1000;
+            const now = this._source.currentTime * 1000;
 
             // Find the best frame to display: among all frames whose captureTime
             // is <= now (i.e. due to be shown), pick the one closest to 'now'
@@ -456,10 +398,10 @@ class VideoRenderer {
                 // No frame is ready for the current playback position.
                 // Check whether we have any future frames at all.
                 if (this._buffer.size === 0) {
-                    // Completely empty — starvation.
-                    this._prebufferOrigin = this._source.currentTime;
+                    // Completely empty — starvation. The pipeline flushes and
+                    // calls onSeeked(), which rebuffers from here.
                     console.warn(`[VideoCensor] buffer starvation at ${this._source.currentTime.toFixed(3)}s`);
-                    this._enterBuffering();
+                    this._onStarved();
                     return;
                 }
                 // Frames exist but are all in the future — wait for the source
@@ -485,15 +427,15 @@ class VideoRenderer {
     }
 
     _clearOverlay() {
-        // Draw the first available buffered frame immediately to avoid a black flash.
-        // _tick() will take over from here and won't re-consume this frame because
-        // we don't delete it from the buffer.
+        // Draw the earliest buffered frame (by media time) immediately to avoid
+        // a black flash. _tick() takes over from here; the frame stays in the
+        // buffer.
         let earliest = null;
-        for (const [frameNum, entry] of this._buffer) {
-            if (earliest === null || frameNum < earliest) earliest = frameNum;
+        for (const entry of this._buffer.values()) {
+            if (earliest === null || entry.captureTime < earliest.captureTime) earliest = entry;
         }
         if (earliest !== null) {
-            const { bitmap } = this._buffer.get(earliest);
+            const { bitmap } = earliest;
             if (this._canvas.width !== bitmap.width || this._canvas.height !== bitmap.height) {
                 this._canvas.width  = bitmap.width;
                 this._canvas.height = bitmap.height;

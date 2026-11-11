@@ -10,7 +10,7 @@ const SETTING_DEFAULTS = {
     // Video tab
     videoPrebufferSeconds: 10,
     videoTargetFps:        10,
-    videoMaxInFlight:      128,
+    videoMaxInFlight:      12,
     videoFrameFormat:      'webp',
     frameCompressionLevel: 0.5,
 };
