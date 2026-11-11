@@ -12,7 +12,7 @@
  * The behaviors are mutually exclusive. Enabling one will disable the other.
  *
  * Load order requirement (manifest.json):
- *   state.js → … → video_ws.js → video_capture.js → video_renderer.js
+ *   state.js → … → video_ws.js → video_audio.js → video_capture.js → video_renderer.js
  *   → video_controls.js → video_pipeline.js → video_jobs.js → videos.js → …
  */
 

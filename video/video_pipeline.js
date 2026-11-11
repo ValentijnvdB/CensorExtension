@@ -3,21 +3,28 @@
  *
  * For each <video> element that should be censored, a VideoPipeline:
  *   1. Hides the original and inserts an output <canvas> in its place
- *   2. Creates a VideoCapture (frame extraction)
+ *   2. Creates an AudioDelay, a VideoRenderer and a VideoCapture
  *   3. Registers with the shared VideoWS (video_ws.js)
- *   4. Creates a VideoRenderer (frame display + audio)
- *   5. Adds a control bar (VideoControls) if the video used native controls
- *   6. Wires up seek/pause/play event listeners
+ *   4. Adds a control bar (VideoControls) if the video used native controls
+ *   5. Follows the source's events
  *
- * Event handler guards:
- *   _onSeeked  – ignored when capture.isOwnSeek() (internal seek-step) or
- *                renderer.internalPlayback (snap-back seek after buffering).
- *                A user seek while stepping is not ignored.
+ * Delay line (see video_renderer.js): the hidden source plays normally, its
+ * frames go to the backend as they are presented, and picture and audio come
+ * out videoDelaySeconds later. The pipeline never pauses or seeks the source
+ * itself, so every event on it comes from the user or the site's player:
+ *
+ *   play     – create the audio graph (needs the user's activation), resume audio
+ *   playing  – resume audio (after a stall)
+ *   pause    – freeze audio (not at the end: the delay still has to play out)
+ *   waiting  – freeze audio while the source stalls (its time stands still too)
+ *   seeking  – flush: cancel the frames in flight, forget all frames, empty the
+ *              audio delay, start a new segment at the new position
+ *   seeked   – paused: censor the frame at the new position once (a still)
+ *   loadeddata, emptied – a new source: flush, and show a still when paused
+ *   ended    – show the last delay seconds (VideoRenderer.onEnded)
  *
  * Frames are tagged with the seekId they were captured in; frames of an
  * older seek are dropped and don't count towards the in-flight limit.
- *   _onPause   – ignored when renderer.internalPlayback (starvation pause).
- *   _onPlay    – ignored when renderer.internalPlayback (resume after buffering).
  *
  * Cross-origin iframe videos are detected and skipped with a console message.
  */
@@ -32,15 +39,24 @@ class VideoPipeline {
 
         this._capture  = null;
         this._renderer = null;
+        this._audio    = null;
         this._canvas   = null;
         this._wrapper  = null;
         this._controls = null;
+        this._source   = null;
         this._saved    = null;   // the original's state that _buildDom changes
 
-        this._boundOnSeeked = this._onSeeked.bind(this);
-        this._boundOnPause  = this._onPause.bind(this);
-        this._boundOnPlay   = this._onPlay.bind(this);
-        this._boundOnEnded  = this._onEnded.bind(this);
+        this._listeners = {
+            play:       () => this._onPlay(),
+            playing:    () => this._audio.resume(),
+            pause:      () => this._onPause(),
+            waiting:    () => this._audio.suspend(),
+            seeking:    () => this._flush(),
+            seeked:     () => this._showStillIfPaused(),
+            loadeddata: () => this._showStillIfPaused(),
+            emptied:    () => this._flush(),
+            ended:      () => this._renderer.onEnded(),
+        };
     }
 
     start() {
@@ -50,39 +66,35 @@ class VideoPipeline {
         if (!source) return;
 
         this._active = true;
+        this._source = source;
         const hadControls = source.hasAttribute("controls");
         this._buildDom(source);
 
-        // VideoCapture: extracts frames from the hidden source.
-        this._capture = new VideoCapture(
+        const delay = Math.max(0.5, Number(videoDelaySeconds) || SETTING_DEFAULTS.videoDelaySeconds);
+        this._audio    = new AudioDelay(source, delay);
+        this._renderer = new VideoRenderer(source, this._canvas, this._audio, delay);
+        this._capture  = new VideoCapture(
             source,
             (frameNum, captureTime, bytes, seekId) => {
                 this._renderer.recordFrameDispatch(frameNum, captureTime);
                 videoWsSend(this._id, seekId, frameNum, bytes);
             },
-            () => this._renderer.isBufferFull(),
             () => this._renderer.seekId,
         );
 
-        // VideoRenderer: displays censored frames, manages audio.
-        this._renderer = new VideoRenderer(source, this._canvas,
-            // Called when the renderer enters BUFFERING and needs frames.
-            () => this._capture.start(),
-            // The buffer ran dry: what is still in flight is behind the playhead.
-            () => this._flush(),
-        );
-
-        // Register with the shared WS.
         videoWsRegister(this._id, {
             onFrame: (seekId, frameNum, bytes) => {
-                this._renderer.receiveFrame(seekId, frameNum, bytes, () => {
-                    // A frame of an older seek: capture.reset() already zeroed
-                    // the in-flight count, so it must not be decremented again.
-                    if (seekId === this._renderer?.seekId) this._capture?.frameCompleted();
-                });
+                // A frame of an older seek: capture.reset() already zeroed the
+                // in-flight count, so it must not be decremented again.
+                if (seekId === this._renderer.seekId) this._capture.frameCompleted();
+                this._renderer.receiveFrame(seekId, frameNum, bytes);
             },
-            onOpen:  () => this._renderer.start(),
-            onClose: () => this._renderer.onWsClose(),
+            onFrameFailed: (seekId, frameNum) => {
+                if (seekId === this._renderer.seekId) this._capture.frameCompleted();
+                this._renderer.forgetFrame(seekId, frameNum);
+            },
+            // Frames in flight are lost with the connection.
+            onClose: () => this._capture.reset(),
         });
 
         // The native controls are hidden with the video: offer our own instead.
@@ -91,10 +103,12 @@ class VideoPipeline {
             this._controls = new VideoControls(this._wrapper, this._canvas, source, this._renderer);
         }
 
-        source.addEventListener("seeked", this._boundOnSeeked);
-        source.addEventListener("pause",  this._boundOnPause);
-        source.addEventListener("play",   this._boundOnPlay);
-        source.addEventListener("ended",  this._boundOnEnded);
+        for (const [type, fn] of Object.entries(this._listeners)) source.addEventListener(type, fn);
+
+        // Taking over a video that already plays: its audio gets delayed from now.
+        if (!source.paused) this._audio.ensure();
+        this._capture.start();
+        this._showStillIfPaused();
     }
 
     destroy() {
@@ -105,13 +119,11 @@ class VideoPipeline {
         this._controls?.destroy();
         this._capture?.destroy();
         this._renderer?.destroy();
+        this._audio?.destroy();
 
-        const source = this._wrapper?.querySelector("video[data-censor-source]");
+        const source = this._source;
         if (source) {
-            source.removeEventListener("seeked", this._boundOnSeeked);
-            source.removeEventListener("pause",  this._boundOnPause);
-            source.removeEventListener("play",   this._boundOnPlay);
-            source.removeEventListener("ended",  this._boundOnEnded);
+            for (const [type, fn] of Object.entries(this._listeners)) source.removeEventListener(type, fn);
         }
 
         if (this._wrapper && this._original) {
@@ -130,6 +142,8 @@ class VideoPipeline {
         this._saved    = null;
         this._capture  = null;
         this._renderer = null;
+        this._audio    = null;
+        this._source   = null;
         this._canvas   = null;
         this._wrapper  = null;
     }
@@ -203,59 +217,35 @@ class VideoPipeline {
 
     // ── Video event handlers ──────────────────────────────────────────────────
 
-    _onSeeked() {
-        // Ignore seeks from the capture's internal seek-step loop (but not a
-        // user seek made while it steps).
-        if (this._capture?.isOwnSeek()) return;
+    _onPlay() {
+        this._audio.ensure();
+        this._audio.resume();
+    }
 
-        // Ignore seeks from the renderer snapping back to the prebuffer origin,
-        // or from the audio-sync nudge.
-        if (this._renderer?.internalPlayback) return;
-
-        this._flush();
+    _onPause() {
+        // At the end the source pauses too, but the delay still holds the last
+        // seconds of audio, which the renderer's tail shows the picture for.
+        if (!this._source.ended) this._audio.suspend();
     }
 
     /**
      * Drop every frame of the current seekId (queued, at the backend, and
-     * buffered) and rebuffer from the source's position. For a user seek and
-     * for starvation.
+     * buffered) and the delayed audio, and start again from the source's
+     * position.
      */
     _flush() {
         // Tell the backend to cancel all in-flight work for the current (now
         // stale) seekId before the renderer increments it.
         videoWsCancel(this._id, this._renderer.seekId);
-
-        this._capture.stop();
         this._capture.reset();
-        this._renderer.onSeeked();
-        // renderer.onSeeked() increments seekId, calls _enterBuffering() which
-        // calls _onNeedFrames() which calls capture.start().
+        this._renderer.flush();
+        this._audio.flush();
     }
 
-    _onPause() {
-        // Ignore pauses we triggered ourselves (starvation / prebuffering).
-        if (this._renderer?.internalPlayback) return;
-
-        // User-initiated pause: renderer acknowledges, capture keeps stepping
-        // to fill the buffer while the source is paused.
-        this._renderer.onPaused();
-        // Capture is already running; if it was in playing mode, the 'pause'
-        // event on the source will switch it to stepping mode automatically
-        // (via the listener in VideoCapture).
-    }
-
-    _onPlay() {
-        // Ignore resumes we triggered ourselves.
-        if (this._renderer?.internalPlayback) return;
-
-        this._renderer.onResumed();
-        // Capture restarts via _onNeedFrames if the renderer enters BUFFERING,
-        // or continues running if it was already in PLAYING state.
-    }
-
-    _onEnded() {
-        this._capture.stop();
-        this._renderer.onPaused();
+    /** A paused video shows the censored frame at its position (start, seek while paused). */
+    _showStillIfPaused() {
+        const v = this._source;
+        if (v.paused && !v.seeking && v.readyState >= 2) this._capture.captureStill();
     }
 }
 

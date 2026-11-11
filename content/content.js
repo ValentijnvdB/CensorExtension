@@ -31,7 +31,7 @@ Promise.all([
     settings.prerenderVideos = stored.videoBehavior === 'prerender';
 
     // Video pipeline config.
-    videoPrebufferSeconds = stored.videoPrebufferSeconds;
+    videoDelaySeconds = stored.videoDelaySeconds;
     videoTargetFps        = stored.videoTargetFps;
     videoMaxInFlight      = stored.videoMaxInFlight;
     videoFrameFormat      = stored.videoFrameFormat;
@@ -87,7 +87,7 @@ browser.runtime.onMessage.addListener((msg) => {
     if (msg.setting === "imageResponse") settings.imageResponse = msg.value;
 
     // Video pipeline config
-    if (msg.setting === "videoPrebufferSeconds") videoPrebufferSeconds = msg.value;
+    if (msg.setting === "videoDelaySeconds") videoDelaySeconds = msg.value;
     if (msg.setting === "videoTargetFps")        videoTargetFps        = msg.value;
     if (msg.setting === "videoMaxInFlight")      videoMaxInFlight      = msg.value;
     if (msg.setting === "videoFrameFormat")      videoFrameFormat      = msg.value;

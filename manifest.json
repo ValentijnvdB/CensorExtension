@@ -25,6 +25,7 @@
         "content/filters.js",
         "content/gifs.js",
         "video/video_ws.js",
+        "video/video_audio.js",
         "video/video_capture.js",
         "video/video_renderer.js",
         "video/video_controls.js",

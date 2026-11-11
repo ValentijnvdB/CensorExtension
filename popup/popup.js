@@ -8,7 +8,7 @@ const SETTING_DEFAULTS = {
     serverFetch:           true,
     imageResponse:         'url',
     // Video tab
-    videoPrebufferSeconds: 10,
+    videoDelaySeconds:     3,
     videoTargetFps:        10,
     videoMaxInFlight:      12,
     videoFrameFormat:      'webp',
@@ -31,7 +31,7 @@ browser.storage.sync.get(SETTING_DEFAULTS).then(settings => {
     applySelectUI("videoBehavior",          settings.videoBehavior);
     applySelectUI("loadBehavior",           settings.loadBehavior);
     applySelectUI("videoFrameFormat",       settings.videoFrameFormat);
-    applyNumericUI("videoPrebufferSeconds", settings.videoPrebufferSeconds);
+    applyNumericUI("videoDelaySeconds", settings.videoDelaySeconds);
     applyNumericUI("videoTargetFps",        settings.videoTargetFps);
     applyNumericUI("videoMaxInFlight",      settings.videoMaxInFlight);
     applyNumericUI("frameCompressionLevel", settings.frameCompressionLevel);
@@ -77,7 +77,7 @@ for (const setting of ["gifBehavior", "videoBehavior", "loadBehavior", "videoFra
 }
 
 // ── Numeric input interactions ────────────────────────────────────────────────
-for (const setting of ["videoPrebufferSeconds", "videoTargetFps", "videoMaxInFlight", "frameCompressionLevel"]) {
+for (const setting of ["videoDelaySeconds", "videoTargetFps", "videoMaxInFlight", "frameCompressionLevel"]) {
     $(`input-${setting}`).addEventListener("change", async () => {
         const newValue = parseFloat($(`input-${setting}`).value);
         if (isNaN(newValue)) return;

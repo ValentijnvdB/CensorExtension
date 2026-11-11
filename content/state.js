@@ -19,7 +19,7 @@ const SETTING_DEFAULTS = {
     serverFetch:           true,      // let the server download public images (type: source)
     imageResponse:         'url',     // 'url' (served from /censored/<name>) | 'base64'
     // Video config (previously hard-coded)
-    videoPrebufferSeconds: 10,
+    videoDelaySeconds:     3,
     videoTargetFps:        10,
     videoMaxInFlight:      12,
     videoFrameFormat:      'webp',
@@ -39,11 +39,11 @@ let videoFrameFormat = SETTING_DEFAULTS.videoFrameFormat;
 let frameCompressionLevel = SETTING_DEFAULTS.frameCompressionLevel;
 
 /**
- * How many seconds of frames to buffer before starting playback.
- * The pipeline stays in BUFFERING state until this many seconds' worth of
- * frames are ready, then unpauses the output canvas and audio.
+ * Live video: seconds the censored picture and the audio run behind the
+ * source video. The backend has this long to censor each frame; a seek
+ * shows "Buffering…" for this long.
  */
-let videoPrebufferSeconds = SETTING_DEFAULTS.videoPrebufferSeconds;
+let videoDelaySeconds = SETTING_DEFAULTS.videoDelaySeconds;
 
 // Target frames per second to send to the backend to prevent buffer starvation.
 let videoTargetFps = SETTING_DEFAULTS.videoTargetFps;

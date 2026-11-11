@@ -50,8 +50,14 @@ of the extension are not migrated.
 
 The popup's *Video behavior* has two ways to censor videos:
 
-- *Censor (live)* sends the frames over the `/censor_frame` WebSocket while the video plays. Works for streams and
-  long videos, but seeking re-buffers. Videos that use the browser's own controls get a simple control bar instead
+- *Censor (live)* sends the frames over the `/censor_frame` WebSocket while the video plays, and shows the censored
+  picture and the audio a few seconds later (*Delay* in the popup, default 3 s): that is the time the server gets per
+  frame. Starting and seeking take that long; after that it plays without buffering. A server that can't keep up
+  gives a lower frame rate rather than pauses (the console says when frames come late: raise the delay or lower the
+  FPS). Works for streams, long videos and MediaSource sites, if the page lets the extension read the video. The
+  audio of a video from another site (a CDN) plays from a second, hidden `<audio>` element, because Firefox gives
+  Web Audio only silence for those; it downloads the file a second time and can be up to about 0.2 s out of step for
+  a few seconds after starting or seeking. Videos that use the browser's own controls get a simple control bar instead
   (play/pause, seeking, time, mute); on sites with their own player, that player keeps working.
 - *Censor (pre-render)* censors the whole video on the server first, as a background job (`POST /videos`), while the
   video stays hidden behind its progress. Then it plays normally, with seeking and audio. Best for short clips.
@@ -72,6 +78,5 @@ With version v0.1, you can now censor videos in real-time.
 Not all websites are supported, because of how videos are streamed on them.
 You need the latest version of the CensorTool and a decent computer that can keep up.
 
-It does not always work perfectly. Sometimes, it freezes or shows a few frames out of order. 
-Moving the video back or forward a few seconds fixes this most of the time.
-Additionally, the progress bar is stays at 0, however skipping forwards still works.
+The picture and audio run a few seconds behind the video (see *Censor (live)* above), so a site's own player shows a
+time that is ahead of what you see.

@@ -135,10 +135,10 @@
 
         <div class="setting-row">
           <div class="setting-info">
-            <span class="setting-name">Buffer length</span>
-            <span class="setting-desc">Seconds of frames to buffer before playback starts</span>
+            <span class="setting-name">Delay</span>
+            <span class="setting-desc">Seconds the video and its audio run behind — raise it if frames arrive late</span>
           </div>
-          <input class="num-input" type="number" id="input-videoPrebufferSeconds" min="0" max="60" step="1" />
+          <input class="num-input" type="number" id="input-videoDelaySeconds" min="0.5" max="60" step="0.5" />
         </div>
 
         <div class="setting-row">

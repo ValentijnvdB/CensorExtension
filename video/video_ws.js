@@ -27,6 +27,9 @@
  *   settings change. null makes the server use its own censor config. The
  *   server answers {"type": "config", "status": "success"} or
  *   {"type": "error", "error": "..."}.
+ *
+ * A frame the server fails gets {"type": "error", ..., "header": "<hex>"}
+ * with that frame's header; it goes to the handler's onFrameFailed.
  */
 
 /** WebSocket URL derived from the configured base URL (http→ws, https→wss). */
@@ -49,7 +52,8 @@ let _wsLastConfigJson = null;   // last config sent on the current connection
 const _wsSendQueue = [];
 
 function videoWsRegister(videoId, handlers) {
-    // handlers: { onFrame(seekId, frameNum, bytes: ArrayBuffer), onOpen(), onClose() }
+    // handlers: { onFrame(seekId, frameNum, bytes: ArrayBuffer), onFrameFailed?(seekId, frameNum),
+    //             onOpen?(), onClose?() }
     _videoWsHandlers.set(videoId, handlers);
     _videoWsEnsureConnected();
 }
@@ -164,6 +168,13 @@ function _handleWsText(text) {
     }
     if (msg.type === "error") {
         console.warn("[VideoCensor] Server error:", msg.error);
+        // A failed frame: free its place so capture doesn't wait for it.
+        if (typeof msg.header === "string" && /^[0-9a-f]{26}$/i.test(msg.header)) {
+            const bytes = new Uint8Array(msg.header.match(/../g).map(h => parseInt(h, 16)));
+            const view  = new DataView(bytes.buffer);
+            const handlers = _videoWsHandlers.get(view.getUint32(1, false));
+            handlers?.onFrameFailed?.(view.getUint32(5, false), view.getUint32(9, false));
+        }
     }
 }
 
