@@ -1,7 +1,7 @@
 /**
  * videos.js – Video detection and handling
  *
- * Two mutually exclusive features:
+ * Two of the video behaviors (the third, 'prerender', is in video_jobs.js):
  *
  *   1. removeVideos: replaces <video> elements with a static placeholder clip.
  *
@@ -9,11 +9,11 @@
  *      to <base URL>/censor_frame (ws:// or wss://), and displays the censored frames
  *      on a <canvas> in place of the video.
  *
- * The two features are mutually exclusive. Enabling one will disable the other.
+ * The behaviors are mutually exclusive. Enabling one will disable the other.
  *
  * Load order requirement (manifest.json):
  *   state.js → … → video_ws.js → video_capture.js → video_renderer.js
- *   → video_pipeline.js → videos.js → …
+ *   → video_controls.js → video_pipeline.js → video_jobs.js → videos.js → …
  */
 
 // ── Feature 1: removeVideos ───────────────────────────────────────────────────

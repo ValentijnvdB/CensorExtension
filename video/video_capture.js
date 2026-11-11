@@ -15,10 +15,16 @@
  *     the browser has landed at the new position, then captures the frame.
  *     Gated by VIDEO_MAX_IN_FLIGHT so we don't flood the backend.
  *
- * isStepping is a public flag read by VideoPipeline._onSeeked() to suppress
- * buffer flushes triggered by our own internal seeks.
+ * isOwnSeek() is read by VideoPipeline._onSeeked() to tell our own step seeks
+ * apart from user seeks (also a user seek made while stepping).
  *
- * Emits: onFrame(frameNum: number, captureTime: number, stepping: boolean, bytes: ArrayBuffer)
+ * Seeks and frame numbers:
+ *   Frame numbers never restart, so a frame from before a seek never shares a
+ *   number with one after it. Each frame is tagged with the seekId at the
+ *   moment it is captured (getSeekId()); a frame whose seekId is stale by the
+ *   time it is encoded is dropped instead of sent.
+ *
+ * Emits: onFrame(frameNum: number, captureTime: number, stepping: boolean, bytes: ArrayBuffer, seekId: number)
  *   captureTime is source.currentTime * 1000 at the moment of capture.
  *   stepping mirrors isStepping at capture time; the renderer uses it to
  *   identify frames whose captureTime is in video-time space (currentTime*1000)
@@ -33,11 +39,14 @@ class VideoCapture {
      *   Returns true when the renderer's buffer has enough frames and capture
      *   should stop stepping. Only consulted in stepping mode — in playing mode
      *   the rVFC cadence naturally limits output to the video's frame rate.
+     * @param {function(): number} getSeekId
+     *   The renderer's current seekId.
      */
-    constructor(sourceVideo, onFrame, isBufferFull) {
+    constructor(sourceVideo, onFrame, isBufferFull, getSeekId) {
         this._source       = sourceVideo;
         this._onFrame      = onFrame;
         this._isBufferFull = isBufferFull;
+        this._getSeekId    = getSeekId;
         this._frameNum  = 0;
         this._capturing = false;
 
@@ -51,6 +60,8 @@ class VideoCapture {
         this._stepping        = false; // true while the seek-step loop is active
         this._stepPending     = false; // true while waiting for 'seeked' to fire
         this._stepQueued      = false; // true if a step was requested while one was in flight
+        this._stepTarget      = null;  // currentTime our pending step seek asked for
+        this._stepListener    = null;  // its 'seeked' listener
 
         this._boundRvfcLoop    = this._rvfcLoop.bind(this);
         this._boundRafFallback = this._rafFallbackLoop.bind(this);
@@ -71,6 +82,16 @@ class VideoCapture {
     /** True while the seek-step loop is advancing currentTime internally. */
     get isStepping() { return this._stepping; }
 
+    /**
+     * True if the seek that just finished is our own step seek. A user seek
+     * made while a step is pending aborts the step (only the user's 'seeked'
+     * fires), and lands elsewhere than the step's target.
+     */
+    isOwnSeek() {
+        return this._stepPending && this._stepTarget !== null &&
+               Math.abs(this._source.currentTime - this._stepTarget) < 0.001;
+    }
+
     start() {
         if (this._capturing) return;
         this._capturing = true;
@@ -88,9 +109,13 @@ class VideoCapture {
         // 'seeked' listener is harmless and will self-cancel on next tick check.
     }
 
+    /**
+     * Forget everything of the current seek. Frame numbers keep counting, and
+     * frames still being encoded are dropped (their seekId is stale).
+     */
     reset() {
         this.stop();
-        this._frameNum      = 0;
+        this._removeStepListener();
         this._inFlightCount = 0;
         this._lastVideoTime = -1;
         this._stepping      = false;
@@ -128,6 +153,7 @@ class VideoCapture {
 
     destroy() {
         this.stop();
+        this._removeStepListener();
         this._source.removeEventListener("pause", this._boundOnPause);
         this._source.removeEventListener("play",  this._boundOnPlay);
     }
@@ -223,23 +249,24 @@ class VideoCapture {
             return;
         }
 
-        this._stepPending = true;
-
         // Advance currentTime by one frame interval.
         const nextTime = this._source.currentTime + (1 / videoTargetFps);
         const duration = this._source.duration;
 
         if (isFinite(duration) && nextTime > duration) {
             // Reached end of video — stop stepping.
-            this._stepping    = false;
-            this._stepPending = false;
+            this._stepping = false;
             return;
         }
+
+        this._stepPending = true;
 
         // Wait for the browser to confirm it has seeked to (approximately)
         // the requested position before capturing.
         const onSeeked = () => {
-            this._stepPending = false;
+            this._stepListener = null;
+            this._stepPending  = false;
+            this._stepTarget   = null;
             if (!this._capturing || !this._stepping) return;
 
             // Abort if the buffer filled up while we were waiting for the seek.
@@ -263,8 +290,20 @@ class VideoCapture {
             this._scheduleStep();
         };
 
+        this._stepListener = onSeeked;
         this._source.addEventListener("seeked", onSeeked, { once: true });
         this._source.currentTime = nextTime;
+        // Read back: the browser may store the time with less precision.
+        this._stepTarget = this._source.currentTime;
+    }
+
+    _removeStepListener() {
+        if (this._stepListener) {
+            this._source.removeEventListener("seeked", this._stepListener);
+            this._stepListener = null;
+        }
+        this._stepPending = false;
+        this._stepTarget  = null;
     }
 
     // ── Shared ────────────────────────────────────────────────────────────────
@@ -275,6 +314,7 @@ class VideoCapture {
 
         const captureTime = v.currentTime * 1000;
         const frameNum    = this._frameNum++;
+        const seekId      = this._getSeekId();
         this._lastVideoTime = v.currentTime;
 
         this._inFlightCount++;
@@ -284,14 +324,20 @@ class VideoCapture {
         tempCanvas.height = v.videoHeight;
         tempCanvas.getContext("2d").drawImage(v, 0, 0);
 
+        // A seek while encoding makes the frame stale: drop it. reset() already
+        // set the in-flight count of the new seek, so it isn't decremented.
+        const isStale = () => seekId !== this._getSeekId();
+
         tempCanvas.toBlob((blob) => {
+            if (isStale()) return;
             if (!blob) {
-                this._inFlightCount--;
+                this._inFlightCount = Math.max(0, this._inFlightCount - 1);
                 return;
             }
             blob.arrayBuffer().then(bytes => {
+                if (isStale()) return;
                 this._recordDispatch();
-                this._onFrame(frameNum, captureTime, true, bytes);
+                this._onFrame(frameNum, captureTime, true, bytes, seekId);
             });
         }, `image/${videoFrameFormat}`, frameCompressionLevel);
     }

@@ -72,6 +72,11 @@ class VideoRenderer {
         // True if we paused the source due to buffering/starvation.
         this._sourcePausedByUs = false;
 
+        // source.currentTime when the user paused during PLAYING. Capture keeps
+        // stepping the source forward to fill the buffer, so on resume we seek
+        // back here instead of continuing where capture got to.
+        this._pausedAt = null;
+
         // Clock sync point set when PLAYING starts. Used by _tick() to convert
         // source.currentTime into the performance.now() timeline so it can be
         // compared against captureTime (which is performance.now()-based in
@@ -85,14 +90,43 @@ class VideoRenderer {
     get seekId() { return this._seekId; }
     get state()  { return this._state; }
 
+    /** True while the video plays or should play (also while we hold it paused to buffer). */
+    get wantsPlayback() {
+        return !this._source.paused || this._sourcePausedByUs;
+    }
+
+    /**
+     * The playback position to show, in seconds. Not always source.currentTime:
+     * while buffering or paused, capture steps the source ahead.
+     */
+    get displayTime() {
+        if (this._state === RendererState.BUFFERING && this._prebufferOrigin !== null) return this._prebufferOrigin;
+        if (this._pausedAt !== null && this._source.paused) return this._pausedAt;
+        return this._source.currentTime;
+    }
+
+    /** A pause asked for by the control bar (VideoControls). */
+    userPause() {
+        // Also when we hold the source paused to buffer: don't resume it then.
+        this._sourcePausedByUs = false;
+        if (!this._source.paused) this._source.pause();   // → 'pause' → onPaused()
+    }
+
     /** Returns true when the buffer has reached the prebuffer target. */
     isBufferFull() {
         return this._buffer.size >= this._prebufferFrames;
     }
 
-    /** Called by VideoPipeline when the WS connects. */
+    /**
+     * Called by VideoPipeline when the WS connects. Keeps a BUFFERING or
+     * PLAYING state: the video may have started (autoplay) before the WS was
+     * open, and its frames were queued meanwhile. A video that was already
+     * playing when the pipeline took it over never sends 'play', so buffering
+     * starts here.
+     */
     start() {
-        this._state = RendererState.IDLE;
+        if (this._state !== RendererState.IDLE) return;
+        if (!this._source.paused && !this._source.ended) this._enterBuffering();
     }
 
     /** Called by VideoPipeline when the WS drops. */
@@ -126,6 +160,12 @@ class VideoRenderer {
         createImageBitmap(new Blob([bytes])).then(bitmap => {
             onConsumed();
 
+            // A seek happened while decoding: the frame belongs to the old position.
+            if (seekId !== this._seekId) {
+                bitmap.close();
+                return;
+            }
+
             let ct       = dispatch?.captureTime ?? 0;
             const isStepping = dispatch?.stepping ?? false;
 
@@ -153,6 +193,7 @@ class VideoRenderer {
     /** Called by VideoPipeline on a user-initiated seek. */
     onSeeked() {
         this._seekId++;
+        this._pausedAt = null;
         this._captureTimeMap.clear();
         this._clockSync = null;
         for (const [, { bitmap }] of this._buffer) bitmap.close();
@@ -166,6 +207,9 @@ class VideoRenderer {
         // Clear our ownership flag — the user paused, not us.
         // We must NOT resume the source when the buffer refills.
         this._sourcePausedByUs = false;
+        if (this._state === RendererState.PLAYING && this._pausedAt === null) {
+            this._pausedAt = this._source.currentTime;
+        }
         this._stopPlaybackLoop();
         // Keep state as-is; capture will keep stepping to fill the buffer.
         // If we were PLAYING, stay logically in a "paused-playing" sub-state
@@ -183,7 +227,19 @@ class VideoRenderer {
             return;
         }
         if (this._state === RendererState.PLAYING) {
-            // Was playing, user paused then resumed.
+            // Was playing, user paused then resumed. Capture stepped the source
+            // ahead meanwhile: go back to where the user paused first.
+            const pausedAt = this._pausedAt;
+            this._pausedAt = null;
+            if (pausedAt !== null && Math.abs(this._source.currentTime - pausedAt) > 0.05) {
+                this.internalPlayback = true;
+                this._source.addEventListener("seeked", () => {
+                    this.internalPlayback = false;
+                    if (this._state === RendererState.PLAYING) this.onResumed();
+                }, { once: true });
+                this._source.currentTime = pausedAt;
+                return;
+            }
             if (this._buffer.size >= this._prebufferFrames) {
                 this._startPlaybackLoop();
             } else {

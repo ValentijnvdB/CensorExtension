@@ -6,11 +6,16 @@
  *   2. Creates a VideoCapture (frame extraction)
  *   3. Registers with the shared VideoWS (video_ws.js)
  *   4. Creates a VideoRenderer (frame display + audio)
- *   5. Wires up seek/pause/play event listeners
+ *   5. Adds a control bar (VideoControls) if the video used native controls
+ *   6. Wires up seek/pause/play event listeners
  *
  * Event handler guards:
- *   _onSeeked  – ignored when capture.isStepping (internal seek-step) or
+ *   _onSeeked  – ignored when capture.isOwnSeek() (internal seek-step) or
  *                renderer.internalPlayback (snap-back seek after buffering).
+ *                A user seek while stepping is not ignored.
+ *
+ * Frames are tagged with the seekId they were captured in; frames of an
+ * older seek are dropped and don't count towards the in-flight limit.
  *   _onPause   – ignored when renderer.internalPlayback (starvation pause).
  *   _onPlay    – ignored when renderer.internalPlayback (resume after buffering).
  *
@@ -29,6 +34,8 @@ class VideoPipeline {
         this._renderer = null;
         this._canvas   = null;
         this._wrapper  = null;
+        this._controls = null;
+        this._saved    = null;   // the original's state that _buildDom changes
 
         this._boundOnSeeked = this._onSeeked.bind(this);
         this._boundOnPause  = this._onPause.bind(this);
@@ -43,16 +50,18 @@ class VideoPipeline {
         if (!source) return;
 
         this._active = true;
+        const hadControls = source.hasAttribute("controls");
         this._buildDom(source);
 
         // VideoCapture: extracts frames from the hidden source.
         this._capture = new VideoCapture(
             source,
-            (frameNum, captureTime, stepping, bytes) => {
+            (frameNum, captureTime, stepping, bytes, seekId) => {
                 this._renderer.recordFrameDispatch(frameNum, captureTime, stepping);
-                videoWsSend(this._id, this._renderer.seekId, frameNum, bytes);
+                videoWsSend(this._id, seekId, frameNum, bytes);
             },
             () => this._renderer.isBufferFull(),
+            () => this._renderer.seekId,
         );
 
         // VideoRenderer: displays censored frames, manages audio.
@@ -65,12 +74,20 @@ class VideoPipeline {
         videoWsRegister(this._id, {
             onFrame: (seekId, frameNum, bytes) => {
                 this._renderer.receiveFrame(seekId, frameNum, bytes, () => {
-                    this._capture.frameCompleted();
+                    // A frame of an older seek: capture.reset() already zeroed
+                    // the in-flight count, so it must not be decremented again.
+                    if (seekId === this._renderer?.seekId) this._capture?.frameCompleted();
                 });
             },
             onOpen:  () => this._renderer.start(),
             onClose: () => this._renderer.onWsClose(),
         });
+
+        // The native controls are hidden with the video: offer our own instead.
+        // Videos without them are driven by their site's player.
+        if (hadControls) {
+            this._controls = new VideoControls(this._wrapper, this._canvas, source, this._renderer);
+        }
 
         source.addEventListener("seeked", this._boundOnSeeked);
         source.addEventListener("pause",  this._boundOnPause);
@@ -83,6 +100,7 @@ class VideoPipeline {
         this._active = false;
 
         videoWsUnregister(this._id);
+        this._controls?.destroy();
         this._capture?.destroy();
         this._renderer?.destroy();
 
@@ -95,10 +113,19 @@ class VideoPipeline {
         }
 
         if (this._wrapper && this._original) {
-            this._original.style.visibility = "";
-            this._wrapper.replaceWith(this._original);
+            const v = this._original;
+            if (this._saved) {
+                v.style.position      = this._saved.position;
+                v.style.visibility    = this._saved.visibility;
+                v.style.pointerEvents = this._saved.pointerEvents;
+                v.controls            = this._saved.controls;
+            }
+            v.removeAttribute("data-censor-source");
+            this._wrapper.replaceWith(v);
         }
 
+        this._controls = null;
+        this._saved    = null;
         this._capture  = null;
         this._renderer = null;
         this._canvas   = null;
@@ -117,6 +144,10 @@ class VideoPipeline {
         this._canvas.height = h;
         this._canvas.style.cssText = v.style.cssText;
         this._canvas.className     = v.className;
+        // Fill the wrapper (the original's size) whatever the frame size is.
+        Object.assign(this._canvas.style, {
+            width: "100%", height: "100%", display: "block", objectFit: "contain", background: "#000",
+        });
         this._canvas.setAttribute("data-censor-canvas", "true");
 
         this._wrapper = document.createElement("div");
@@ -127,6 +158,12 @@ class VideoPipeline {
         // HierarchyRequestError.
         v.replaceWith(this._wrapper);
 
+        this._saved = {
+            position:      source.style.position,
+            visibility:    source.style.visibility,
+            pointerEvents: source.style.pointerEvents,
+            controls:      source.controls,
+        };
         source.style.position      = "absolute";
         source.style.visibility    = "hidden";
         source.style.pointerEvents = "none";
@@ -165,8 +202,9 @@ class VideoPipeline {
     // ── Video event handlers ──────────────────────────────────────────────────
 
     _onSeeked() {
-        // Ignore seeks from the capture's internal seek-step loop.
-        if (this._capture?.isStepping) return;
+        // Ignore seeks from the capture's internal seek-step loop (but not a
+        // user seek made while it steps).
+        if (this._capture?.isOwnSeek()) return;
 
         // Ignore seeks from the renderer snapping back to the prebuffer origin,
         // or from the audio-sync nudge.
@@ -227,4 +265,9 @@ function stopVideoCensorPipeline(video) {
     if (!pipeline) return;
     _activePipelines.delete(video);
     pipeline.destroy();
+}
+
+/** True when a live pipeline runs for `video` (it can't for cross-origin videos). */
+function isVideoCensorPipelineActive(video) {
+    return Boolean(_activePipelines.get(video)?._active);
 }

@@ -12,7 +12,7 @@ const DEFAULTS = {
 const SETTING_DEFAULTS = {
     extensionEnabled:      true,
     gifBehavior:           'remove',  // 'nothing' | 'remove' | 'censor'
-    videoBehavior:         'remove',  // 'nothing' | 'remove' | 'censor'
+    videoBehavior:         'remove',  // 'nothing' | 'remove' | 'censor' (live) | 'prerender'
     loadBehavior:          'blur',
     // Image requests (popup → Images tab)
     batchImages:           true,      // several images per request (POST /censor_images)

@@ -46,6 +46,19 @@ of the extension are not migrated.
   a login), and returned as a URL on the server or as base64.
 - The *Advanced* tab shows and clears the server's detection cache and stored files.
 
+### Videos
+
+The popup's *Video behavior* has two ways to censor videos:
+
+- *Censor (live)* sends the frames over the `/censor_frame` WebSocket while the video plays. Works for streams and
+  long videos, but seeking re-buffers. Videos that use the browser's own controls get a simple control bar instead
+  (play/pause, seeking, time, mute); on sites with their own player, that player keeps working.
+- *Censor (pre-render)* censors the whole video on the server first, as a background job (`POST /videos`), while the
+  video stays hidden behind its progress. Then it plays normally, with seeking and audio. Best for short clips.
+  Videos without a file URL (most large sites use MediaSource), videos over 100 MB, and videos that don't fit in the
+  server's job queue are censored live instead. The server censors each video once: reloading the page, or another
+  page with the same video, gets the same job's result (kept for an hour), also while it is still being censored.
+
 
 ## Planned
 - [ ] Chrome support

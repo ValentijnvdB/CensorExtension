@@ -26,8 +26,9 @@ Promise.all([
     settings.imageResponse    = stored.imageResponse;
 
     // Bool aliases used by videos.js.
-    settings.removeVideos = stored.videoBehavior === 'remove';
-    settings.censorVideos = stored.videoBehavior === 'censor';
+    settings.removeVideos    = stored.videoBehavior === 'remove';
+    settings.censorVideos    = stored.videoBehavior === 'censor';
+    settings.prerenderVideos = stored.videoBehavior === 'prerender';
 
     // Video pipeline config.
     videoPrebufferSeconds = stored.videoPrebufferSeconds;
@@ -43,6 +44,9 @@ Promise.all([
     if (settings.extensionEnabled) {
         for (const img of preInitQueue) enqueueImage(img);
         preInitQueue = [];
+        // Videos seen before now were skipped: the video behavior wasn't known yet.
+        // (Handling a video twice is harmless.)
+        document.querySelectorAll("video").forEach(handleVideo);
     }
 });
 
@@ -62,11 +66,15 @@ browser.runtime.onMessage.addListener((msg) => {
     }
 
     if (msg.setting === "videoBehavior") {
-        settings.videoBehavior = msg.value;
-        settings.removeVideos  = (msg.value === 'remove');
-        settings.censorVideos  = (msg.value === 'censor');
+        settings.videoBehavior   = msg.value;
+        settings.removeVideos    = (msg.value === 'remove');
+        settings.censorVideos    = (msg.value === 'censor');
+        settings.prerenderVideos = (msg.value === 'prerender');
+        // Undo pre-rendering first: it may run live pipelines as a fallback.
+        if (!settings.prerenderVideos) applyPrerenderVideoSetting();
         applyVideoSetting();
         applyCensorVideoSetting();
+        if (settings.prerenderVideos) applyPrerenderVideoSetting();
     }
 
     if (msg.setting === "loadBehavior") {
@@ -91,9 +99,15 @@ browser.runtime.onMessage.addListener((msg) => {
 function processAllImages() {
     if (settings.extensionEnabled) {
         document.querySelectorAll("img").forEach(enqueueImage);
-        document.querySelectorAll("video").forEach(replaceVideoIfNeeded);
-        document.querySelectorAll("video").forEach(censorVideoIfNeeded);
+        document.querySelectorAll("video").forEach(handleVideo);
     }
+}
+
+/** Applies the video behavior to a <video>. */
+function handleVideo(video) {
+    replaceVideoIfNeeded(video);
+    censorVideoIfNeeded(video);
+    prerenderVideoIfNeeded(video);
 }
 
 const observer = new MutationObserver((mutations) => {
@@ -104,11 +118,10 @@ const observer = new MutationObserver((mutations) => {
                 if (node.tagName === "IMG") {
                     enqueueImage(node);
                 } else if (node.tagName === "VIDEO") {
-                    replaceVideoIfNeeded(node);
-                    censorVideoIfNeeded(node);
+                    handleVideo(node);
                 } else {
                     node.querySelectorAll?.("img").forEach(enqueueImage);
-                    node.querySelectorAll?.("video").forEach(replaceVideoIfNeeded);
+                    node.querySelectorAll?.("video").forEach(handleVideo);
                 }
             }
 
