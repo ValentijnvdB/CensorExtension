@@ -22,8 +22,8 @@ const SETTING_DEFAULTS = {
     videoDelaySeconds:     3,
     videoTargetFps:        10,
     videoMaxInFlight:      12,
-    videoFrameFormat:      'webp',
-    frameCompressionLevel: 0.5,
+    videoFrameFormat:      'jpeg',
+    frameCompressionLevel: 0.8,
 };
 
 // ── Video censoring config ────────────────────────────────────────────────────
