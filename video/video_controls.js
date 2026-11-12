@@ -13,6 +13,15 @@
  * Shows: play/pause, a seek bar, the time, and mute. Clicking the canvas
  * toggles play/pause, like the native controls. The bar is shown while the
  * mouse is over the video, and always while it is paused.
+ *
+ * Some sites keep the `controls` attribute but put their own player on top of
+ * the video. Before the bar is shown, it checks what is at its place on the
+ * page: when that is something of the site (not the bar, the canvas or the
+ * wrapper), the site's player covers the video and the bar is turned off for
+ * good. Elements with pointer-events: none don't count (they take no clicks).
+ *
+ * The bar is placed on the canvas's box as laid out, not the wrapper's: site
+ * CSS (via the copied class and style) can size the canvas differently.
  */
 
 class VideoControls {
@@ -29,6 +38,8 @@ class VideoControls {
         this._renderer = renderer;
         this._dragging = false;   // the seek bar is being dragged
         this._hovered  = false;
+        this._disabled = false;   // the site's own player covers the video
+        this._lastCoverCheck = 0;
 
         this._bar  = this._el("div", `
             position:absolute; left:0; right:0; bottom:0; z-index:2;
@@ -101,6 +112,7 @@ class VideoControls {
     // ── Display ───────────────────────────────────────────────────────────────
 
     _update() {
+        if (this._disabled) return;
         const playing  = this._renderer.wantsPlayback;
         const duration = this._source.duration;
         const time     = this._renderer.displayTime;
@@ -122,7 +134,52 @@ class VideoControls {
             ? `${formatVideoTime(shown)} / ${formatVideoTime(duration)}`
             : formatVideoTime(shown);
 
-        this._bar.style.opacity = (this._hovered || !playing || this._dragging) ? "1" : "0";
+        const visible = this._hovered || !playing || this._dragging;
+        if (visible) {
+            this._place();
+            if (this._isCovered()) return this._disable();
+        }
+        this._bar.style.opacity = visible ? "1" : "0";
+    }
+
+    /** Put the bar along the bottom of the canvas as it is laid out. */
+    _place() {
+        const wr = this._wrapper.getBoundingClientRect();
+        const cr = this._canvas.getBoundingClientRect();
+        if (!cr.width || !cr.height) return;
+        Object.assign(this._bar.style, {
+            left:   `${cr.left - wr.left}px`,
+            width:  `${cr.width}px`,
+            right:  "auto",
+            top:    `${cr.bottom - wr.top - this._bar.offsetHeight}px`,
+            bottom: "auto",
+        });
+    }
+
+    /**
+     * Whether a site element lies on top of the bar (its own player). Checked at
+     * most once a second, and only while the bar's middle is in the viewport.
+     */
+    _isCovered() {
+        const now = performance.now();
+        if (now - this._lastCoverCheck < 1000) return false;
+        this._lastCoverCheck = now;
+
+        const r = this._bar.getBoundingClientRect();
+        const x = r.left + r.width / 2, y = r.top + r.height / 2;
+        if (!r.width || x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return false;
+        const top = document.elementFromPoint(x, y);
+        return top !== null && !this._wrapper.contains(top);
+    }
+
+    /** The site has its own player: no bar, no click-to-play. */
+    _disable() {
+        this._disabled = true;
+        clearInterval(this._timer);
+        this._bar.style.display = "none";
+        this._canvas.removeEventListener("click", this._onCanvasClick);
+        this._canvas.style.cursor = "";
+        console.info("[VideoCensor] The site's own player covers the video: no control bar");
     }
 
     // ── Elements ──────────────────────────────────────────────────────────────
