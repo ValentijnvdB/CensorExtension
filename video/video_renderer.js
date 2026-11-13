@@ -25,6 +25,14 @@
  * still have to be shown: onEnded() runs the display time on from there on
  * the wall clock (the audio plays out of the delay meanwhile).
  *
+ * Loops: when the source starts over (the loop attribute, or the site's player
+ * right after the end), the pipeline calls onLoop() instead of flush(). The
+ * source's time restarts at 0, but the renderer's timeline goes on: frame
+ * times and the display time are source time + the duration of each loop
+ * before it (toTimeline()), so the last `delay` seconds of a loop still play
+ * out, and the next loop follows without buffering. displayTime and the audio
+ * get source time again (_toSourceTime()).
+ *
  * Frames are kept encoded and decoded shortly before they are due, so the
  * buffer holds about delay × fps small images instead of decoded bitmaps.
  */
@@ -56,7 +64,10 @@ class VideoRenderer {
         // frameNum → captureTime (media ms), recorded at dispatch
         this._captureTimeMap = new Map();
 
-        this._segmentStart = sourceVideo.currentTime;   // seconds
+        this._segmentStart = sourceVideo.currentTime;   // seconds (timeline)
+        // Timeline time (s) at which each loop started; the last one is the
+        // current loop's offset. Older ones go once the display time passed the next.
+        this._loopOffsets  = [0];
         this._shownTime    = null;    // media ms of the frame on the canvas (this segment)
         this._overlay      = null;    // "buffering" | "late" | null — what is drawn over it
         this._tailStart    = null;    // performance.now() when the source ended
@@ -76,8 +87,13 @@ class VideoRenderer {
     /** True while the video plays. */
     get wantsPlayback() { return !this._source.paused; }
 
-    /** The playback position shown, in seconds. */
-    get displayTime() { return this._clock(); }
+    /** The playback position shown, in seconds (source time). */
+    get displayTime() { return this._toSourceTime(this._clock()); }
+
+    /** A source time (s) on the renderer's timeline, which goes on across loops. */
+    toTimeline(sourceTime) {
+        return sourceTime + this._currentOffset();
+    }
 
     /** A pause asked for by the control bar (VideoControls). */
     userPause() {
@@ -118,11 +134,26 @@ class VideoRenderer {
         this._captureTimeMap.clear();
         for (const entry of this._buffer.values()) entry.bitmap?.close();
         this._buffer.clear();
+        this._loopOffsets  = [0];
         this._segmentStart = this._source.currentTime;
         this._shownTime    = null;
         this._tailStart    = null;
         this._showOverlay("buffering");
         this._startLoop();
+    }
+
+    /**
+     * The source started over (a loop): its time restarts at 0, the timeline
+     * goes on from the end of this loop. False when that can't be done
+     * (unknown duration): the pipeline flushes instead.
+     */
+    onLoop() {
+        const duration = this._source.duration;
+        if (!isFinite(duration) || duration <= 0) return false;
+        this._loopOffsets.push(this._currentOffset() + duration);
+        this._tailStart = null;
+        this._startLoop();
+        return true;
     }
 
     /** The source ended: show its last `delay` seconds on the wall clock. */
@@ -142,7 +173,19 @@ class VideoRenderer {
 
     // ── Clock ─────────────────────────────────────────────────────────────────
 
-    /** The media time (s) to show now. */
+    /** Timeline time (s) of the current loop's source time 0. */
+    _currentOffset() {
+        return this._loopOffsets[this._loopOffsets.length - 1];
+    }
+
+    /** The source time (s) of timeline time t: t minus the offset of the loop it lies in. */
+    _toSourceTime(t) {
+        let offset = 0;
+        for (const o of this._loopOffsets) if (o <= t) offset = o;
+        return t - offset;
+    }
+
+    /** The timeline time (s) to show now. */
     _clock() {
         return Math.max(this._segmentStart, this._rawClock());
     }
@@ -154,9 +197,9 @@ class VideoRenderer {
         if (this._tailStart !== null) {
             t = this._tailFrom + (performance.now() - this._tailStart) / 1000 * rate;
             const duration = this._source.duration;
-            if (isFinite(duration)) t = Math.min(t, duration);
+            if (isFinite(duration)) t = Math.min(t, this._currentOffset() + duration);
         } else {
-            t = this._source.currentTime - (this._delay + this._audio.outputLatency) * rate;
+            t = this.toTimeline(this._source.currentTime) - (this._delay + this._audio.outputLatency) * rate;
         }
         return t;
     }
@@ -177,8 +220,11 @@ class VideoRenderer {
         this._rafHandle = null;
         const now = this._clock() * 1000;
 
+        // Loops the display time is past now.
+        while (this._loopOffsets.length > 1 && this._loopOffsets[1] <= now / 1000) this._loopOffsets.shift();
+
         // The audio plays while the shown time moves (not while buffering).
-        this._audio.sync(now / 1000, this._isAdvancing() && this._rawClock() > this._segmentStart);
+        this._audio.sync(this._toSourceTime(now / 1000), this._isAdvancing() && this._rawClock() > this._segmentStart);
 
         // Newest decoded frame that is due; start decoding the ones due soon.
         let best = null, bestNum = null;
@@ -214,7 +260,7 @@ class VideoRenderer {
 
     /** Whether the display time moves (so a missing frame is the backend's fault). */
     _isAdvancing() {
-        if (this._tailStart !== null) return this._clock() < this._source.duration;
+        if (this._tailStart !== null) return this._clock() < this._currentOffset() + this._source.duration;
         return !this._source.paused && this._source.readyState >= 3;
     }
 

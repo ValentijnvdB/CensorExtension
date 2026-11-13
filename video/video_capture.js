@@ -21,19 +21,26 @@
  *   time it is encoded is dropped instead of sent.
  *
  * Emits: onFrame(frameNum: number, captureTime: number, bytes: ArrayBuffer, seekId: number)
- *   captureTime is the frame's media time in ms.
+ *   captureTime is the frame's time in ms on the renderer's timeline, which
+ *   goes on across loops (toTimeline, see video_renderer.js).
  */
+
+// rVFC's mediaTime is used when it is this close to currentTime (s). Firefox
+// counts it on after a loop while currentTime starts over at 0.
+const CAPTURE_MEDIA_TIME_TOLERANCE = 0.5;
 
 class VideoCapture {
     /**
      * @param {HTMLVideoElement} sourceVideo
      * @param {function(frameNum: number, captureTime: number, bytes: ArrayBuffer, seekId: number)} onFrame
      * @param {function(): number} getSeekId – the renderer's current seekId
+     * @param {function(number): number} toTimeline – source time (s) → the renderer's timeline (s)
      */
-    constructor(sourceVideo, onFrame, getSeekId) {
-        this._source    = sourceVideo;
-        this._onFrame   = onFrame;
-        this._getSeekId = getSeekId;
+    constructor(sourceVideo, onFrame, getSeekId, toTimeline = t => t) {
+        this._source     = sourceVideo;
+        this._onFrame    = onFrame;
+        this._getSeekId  = getSeekId;
+        this._toTimeline = toTimeline;
 
         this._frameNum      = 0;
         this._capturing     = false;
@@ -114,7 +121,9 @@ class VideoCapture {
         // from captureStill(). The presented frame's own time; currentTime may
         // already be past it.
         if (!this._source.paused && !this._source.seeking) {
-            const t = metadata?.mediaTime ?? this._source.currentTime;
+            let t = this._source.currentTime;
+            const mediaTime = metadata?.mediaTime;
+            if (mediaTime !== undefined && Math.abs(mediaTime - t) < CAPTURE_MEDIA_TIME_TOLERANCE) t = mediaTime;
             const isNew = this._useRvfc || t !== this._lastVideoTime;
             this._lastVideoTime = t;
             if (isNew && this._isDue(t)) {
@@ -152,7 +161,7 @@ class VideoCapture {
         const v = this._source;
         if (!v.videoWidth) return;
 
-        const captureTime = time * 1000;
+        const captureTime = this._toTimeline(time) * 1000;
         const frameNum    = this._frameNum++;
         const seekId      = this._getSeekId();
 

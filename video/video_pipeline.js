@@ -17,11 +17,15 @@
  *   playing  – resume audio (after a stall)
  *   pause    – freeze audio (not at the end: the delay still has to play out)
  *   waiting  – freeze audio while the source stalls (its time stands still too)
- *   seeking  – flush: cancel the frames in flight, forget all frames, empty the
- *              audio delay, start a new segment at the new position
+ *   seeking  – a loop back to the start (the loop attribute, or the site's
+ *              player starting over right after 'ended'): the renderer's
+ *              timeline goes on (VideoRenderer.onLoop), nothing is dropped.
+ *              Any other seek flushes: cancel the frames in flight, forget all
+ *              frames, empty the audio delay, start a new segment there
  *   seeked   – paused: censor the frame at the new position once (a still)
  *   loadeddata, emptied – a new source: flush, and show a still when paused
  *   ended    – show the last delay seconds (VideoRenderer.onEnded)
+ *   timeupdate – remember the position, to tell a loop from a seek
  *
  * Frames are tagged with the seekId they were captured in; frames of an
  * older seek are dropped and don't count towards the in-flight limit.
@@ -30,6 +34,13 @@
  */
 
 let _nextVideoId = 1;
+
+// A seek counts as a loop when it lands this close to the start (s) …
+const LOOP_RESTART_MAX  = 0.5;
+// … and, with the loop attribute, the source was this close to its end (s),
+const LOOP_END_MARGIN   = 1;
+// … or it comes this soon after 'ended' (the site's player starting over, ms).
+const LOOP_AFTER_END_MS = 2000;
 
 class VideoPipeline {
     constructor(video) {
@@ -45,17 +56,20 @@ class VideoPipeline {
         this._controls = null;
         this._source   = null;
         this._saved    = null;   // the original's state that _buildDom changes
+        this._lastTime = 0;      // the source's position at its last timeupdate (s)
+        this._endedAt  = null;   // performance.now() of the last 'ended'
 
         this._listeners = {
             play:       () => this._onPlay(),
             playing:    () => this._audio.resume(),
             pause:      () => this._onPause(),
             waiting:    () => this._audio.suspend(),
-            seeking:    () => this._flush(),
+            seeking:    () => this._onSeeking(),
             seeked:     () => this._showStillIfPaused(),
             loadeddata: () => this._showStillIfPaused(),
             emptied:    () => this._flush(),
-            ended:      () => this._renderer.onEnded(),
+            ended:      () => this._onEnded(),
+            timeupdate: () => { if (!this._source.seeking) this._lastTime = this._source.currentTime; },
         };
     }
 
@@ -80,6 +94,7 @@ class VideoPipeline {
                 videoWsSend(this._id, seekId, frameNum, bytes);
             },
             () => this._renderer.seekId,
+            t => this._renderer.toTimeline(t),
         );
 
         videoWsRegister(this._id, {
@@ -226,6 +241,29 @@ class VideoPipeline {
         // At the end the source pauses too, but the delay still holds the last
         // seconds of audio, which the renderer's tail shows the picture for.
         if (!this._source.ended) this._audio.suspend();
+    }
+
+    _onEnded() {
+        this._endedAt = performance.now();
+        this._renderer.onEnded();
+    }
+
+    /** A loop back to the start goes on without a break; any other seek flushes. */
+    _onSeeking() {
+        const looped = this._isLoop() && this._renderer.onLoop();
+        this._endedAt = null;
+        if (!looped) this._flush();
+    }
+
+    /** Whether the seek going on now is the source starting over. */
+    _isLoop() {
+        const v = this._source;
+        const duration = v.duration;
+        if (!isFinite(duration) || v.currentTime > LOOP_RESTART_MAX) return false;
+        // The browser loops it (the loop attribute) …
+        if (v.loop && this._lastTime >= duration - LOOP_END_MARGIN) return true;
+        // … or the site's player starts it over after the end.
+        return this._endedAt !== null && performance.now() - this._endedAt < LOOP_AFTER_END_MS;
     }
 
     /**
