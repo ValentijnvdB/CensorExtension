@@ -62,7 +62,6 @@ function censorVideoIfNeeded(video) {
     if (!settings.censorVideos) return;
     if (video.hasAttribute("data-censor-video-placeholder")) return;
     if (video.hasAttribute("data-censor-source")) return;
-    if (video.closest("[data-censor-wrapper]")) return;
 
     startVideoCensorPipeline(video);
 }
@@ -76,20 +75,6 @@ function applyCensorVideoSetting() {
         }
         findVideosDeep(document).forEach(handleVideo);
     } else {
-        findVideosDeep(document).filter(v => v.hasAttribute("data-censor-source")).forEach(v => {
-            // Walk up to find the original video element tracked by the pipeline.
-            // stopVideoCensorPipeline expects the *original* video, which the
-            // pipeline stored in _activePipelines keyed by the original element.
-            // The MutationObserver / initial scan always calls us with the original,
-            // but if called from applyCensorVideoSetting we need to find originals.
-            const wrapper = v.closest("[data-censor-wrapper]");
-            if (wrapper) {
-                const original = wrapper.__censorOriginal;
-                if (original) stopVideoCensorPipeline(original);
-            }
-        });
-
-        // Fallback: also attempt to stop any video that might be the original.
         findVideosDeep(document).forEach(v => stopVideoCensorPipeline(v));
     }
 }

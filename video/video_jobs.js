@@ -61,7 +61,6 @@ function prerenderVideoIfNeeded(video) {
     if (_prerenders.has(video)) return;
     if (video.hasAttribute("data-censor-video-placeholder")) return;
     if (video.hasAttribute("data-censor-source")) return;
-    if (video.closest("[data-censor-wrapper]")) return;
 
     const prerender = new PrerenderedVideo(video);
     _prerenders.set(video, prerender);

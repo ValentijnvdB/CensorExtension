@@ -33,6 +33,7 @@
         "video/video_audio.js",
         "video/video_capture.js",
         "video/video_renderer.js",
+        "video/video_overlay.js",
         "video/video_controls.js",
         "video/video_pipeline.js",
         "video/video_jobs.js",

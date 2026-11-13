@@ -17,16 +17,16 @@
  * Some sites keep the `controls` attribute but put their own player on top of
  * the video. Before the bar is shown, it checks what is at its place on the
  * page: when that is something of the site (not the bar, the canvas or the
- * wrapper), the site's player covers the video and the bar is turned off for
+ * overlay), the site's player covers the video and the bar is turned off for
  * good. Elements with pointer-events: none don't count (they take no clicks).
  *
- * The bar is placed on the canvas's box as laid out, not the wrapper's: site
- * CSS (via the copied class and style) can size the canvas differently.
+ * The bar lives in the overlay (VideoOverlay, which takes pointer events for
+ * such videos) and is placed along the bottom of the canvas.
  */
 
 class VideoControls {
     /**
-     * @param {HTMLElement}       wrapper   – the pipeline's wrapper (position: relative)
+     * @param {HTMLElement}       wrapper   – the overlay's element (positioned)
      * @param {HTMLCanvasElement} canvas
      * @param {HTMLVideoElement}  source    – the hidden video
      * @param {VideoRenderer}     renderer

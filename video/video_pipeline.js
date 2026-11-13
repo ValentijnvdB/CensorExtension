@@ -2,7 +2,8 @@
  * video_pipeline.js – Per-video orchestrator
  *
  * For each <video> element that should be censored, a VideoPipeline:
- *   1. Hides the original and inserts an output <canvas> in its place
+ *   1. Makes the video invisible and puts an output <canvas> over it
+ *      (VideoOverlay; the video stays where the site put it)
  *   2. Creates an AudioDelay, a VideoRenderer and a VideoCapture
  *   3. Registers with the shared VideoWS (video_ws.js)
  *   4. Adds a control bar (VideoControls) if the video used native controls
@@ -52,10 +53,9 @@ class VideoPipeline {
         this._renderer = null;
         this._audio    = null;
         this._canvas   = null;
-        this._wrapper  = null;
+        this._overlay  = null;
         this._controls = null;
         this._source   = null;
-        this._saved    = null;   // the original's state that _buildDom changes
         this._lastTime = 0;      // the source's position at its last timeupdate (s)
         this._endedAt  = null;   // performance.now() of the last 'ended'
 
@@ -82,7 +82,9 @@ class VideoPipeline {
         this._active = true;
         this._source = source;
         const hadControls = source.hasAttribute("controls");
-        this._buildDom(source);
+        source.setAttribute("data-censor-source", "true");
+        this._overlay = new VideoOverlay(source, { interactive: hadControls });
+        this._canvas  = this._overlay.canvas;
 
         const delay = Math.max(0.5, Number(videoDelaySeconds) || SETTING_DEFAULTS.videoDelaySeconds);
         this._audio    = new AudioDelay(source, delay);
@@ -115,7 +117,7 @@ class VideoPipeline {
         // The native controls are hidden with the video: offer our own instead.
         // Videos without them are driven by their site's player.
         if (hadControls) {
-            this._controls = new VideoControls(this._wrapper, this._canvas, source, this._renderer);
+            this._controls = new VideoControls(this._overlay.element, this._canvas, source, this._renderer);
         }
 
         for (const [type, fn] of Object.entries(this._listeners)) source.addEventListener(type, fn);
@@ -141,72 +143,16 @@ class VideoPipeline {
             for (const [type, fn] of Object.entries(this._listeners)) source.removeEventListener(type, fn);
         }
 
-        if (this._wrapper && this._original) {
-            const v = this._original;
-            if (this._saved) {
-                v.style.position      = this._saved.position;
-                v.style.visibility    = this._saved.visibility;
-                v.style.pointerEvents = this._saved.pointerEvents;
-                v.controls            = this._saved.controls;
-            }
-            v.removeAttribute("data-censor-source");
-            this._wrapper.replaceWith(v);
-        }
+        this._overlay?.destroy();
+        source?.removeAttribute("data-censor-source");
 
         this._controls = null;
-        this._saved    = null;
         this._capture  = null;
         this._renderer = null;
         this._audio    = null;
         this._source   = null;
         this._canvas   = null;
-        this._wrapper  = null;
-    }
-
-    // ── DOM construction ──────────────────────────────────────────────────────
-
-    _buildDom(source) {
-        const v = this._original;
-        const w = v.offsetWidth  || parseInt(v.getAttribute("width"))  || 640;
-        const h = v.offsetHeight || parseInt(v.getAttribute("height")) || 360;
-
-        this._canvas = document.createElement("canvas");
-        this._canvas.width  = w;
-        this._canvas.height = h;
-        this._canvas.style.cssText = v.style.cssText;
-        this._canvas.className     = v.className;
-        // Fill the wrapper (the original's size) whatever the frame size is.
-        Object.assign(this._canvas.style, {
-            width: "100%", height: "100%", display: "block", objectFit: "contain", background: "#000",
-        });
-        this._canvas.setAttribute("data-censor-canvas", "true");
-
-        this._wrapper = document.createElement("div");
-        this._wrapper.style.cssText = `display:inline-block;position:relative;width:${w}px;height:${h}px;`;
-        this._wrapper.setAttribute("data-censor-wrapper", "true");
-
-        // Insert wrapper first, before moving source inside it, to avoid
-        // HierarchyRequestError.
-        v.replaceWith(this._wrapper);
-
-        this._saved = {
-            position:      source.style.position,
-            visibility:    source.style.visibility,
-            pointerEvents: source.style.pointerEvents,
-            controls:      source.controls,
-        };
-        source.style.position      = "absolute";
-        source.style.visibility    = "hidden";
-        source.style.pointerEvents = "none";
-        source.setAttribute("data-censor-source", "true");
-        source.controls = false;
-
-        this._wrapper.appendChild(this._canvas);
-        this._wrapper.appendChild(source);
-
-        // Store a back-reference so applyCensorVideoSetting() in videos.js can
-        // retrieve the original element to call stopVideoCensorPipeline() with.
-        this._wrapper.__censorOriginal = v;
+        this._overlay  = null;
     }
 
     // ── Source video resolution ───────────────────────────────────────────────
