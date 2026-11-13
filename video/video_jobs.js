@@ -74,9 +74,22 @@ function stopAllPrerenders() {
     _prerenders.clear();
 }
 
+/**
+ * Gives a video back to its page unmodified (a DRM-protected one), and plays
+ * it if the page wanted it to play while it was blocked.
+ */
+function releasePrerender(video) {
+    const prerender = _prerenders.get(video);
+    if (!prerender) return;
+    _prerenders.delete(video);
+    const wantsPlay = prerender.wantsPlay;
+    prerender.destroy();
+    if (wantsPlay) video.play().catch(() => {});
+}
+
 function applyPrerenderVideoSetting() {
     if (settings.prerenderVideos) {
-        document.querySelectorAll("video").forEach(prerenderVideoIfNeeded);
+        findVideosDeep(document).forEach(handleVideo);
     } else {
         stopAllPrerenders();
     }
@@ -217,6 +230,9 @@ class PrerenderedVideo {
         this._onPlay      = this._onPlay.bind(this);
         this._onLoadStart = this._onLoadStart.bind(this);
     }
+
+    /** The page tried to play the video (or it autoplays) while it was blocked. */
+    get wantsPlay() { return this._wantsPlay; }
 
     attach() {
         this._block();

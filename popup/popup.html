@@ -12,6 +12,12 @@
       <span class="version" id="version"></span>
     </header>
 
+    <!-- Shown when the page has a DRM-protected video (background.js, video/video_drm.js) -->
+    <div class="page-notice hidden" id="drmNotice">
+      <span class="page-notice-title" id="drmNoticeTitle">DRM-protected video</span>
+      <span class="page-notice-text" id="drmNoticeText"></span>
+    </div>
+
     <!-- Server status (GET /health) -->
     <div class="server-status" id="serverStatus" title="">
       <span class="dot testing" id="serverDot"></span>

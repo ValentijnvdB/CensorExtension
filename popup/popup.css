@@ -317,6 +317,20 @@ select:focus { border-color: var(--accent); }
   line-height: 1.4;
 }
 .config-error.hidden { display: none; }
+
+.page-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  border: 1px solid #f59e0b;
+  border-radius: 3px;
+  background: rgba(245,158,11,0.08);
+}
+.page-notice.hidden { display: none; }
+.page-notice-title { font-family: var(--font-mono); font-weight: 600; color: #f59e0b; }
+.page-notice-text  { color: var(--muted); }
 .config-error-title { font-family: var(--font-mono); font-weight: 600; color: #f87171; }
 .config-error-text  { overflow-wrap: anywhere; user-select: text; }
 .config-error-note  { color: var(--muted); }

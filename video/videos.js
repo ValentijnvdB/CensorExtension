@@ -12,8 +12,9 @@
  * The behaviors are mutually exclusive. Enabling one will disable the other.
  *
  * Load order requirement (manifest.json):
- *   state.js → … → video_ws.js → video_audio.js → video_capture.js → video_renderer.js
- *   → video_controls.js → video_pipeline.js → video_jobs.js → videos.js → …
+ *   state.js → … → shadow_dom.js → … → video_ws.js → video_audio.js → video_capture.js
+ *   → video_renderer.js → video_controls.js → video_pipeline.js → video_jobs.js
+ *   → video_drm.js → videos.js → …
  */
 
 // ── Feature 1: removeVideos ───────────────────────────────────────────────────
@@ -27,9 +28,10 @@ function applyVideoSetting() {
             settings.censorVideos = false;
             applyCensorVideoSetting();
         }
-        document.querySelectorAll("video").forEach(replaceVideoIfNeeded);
+        findVideosDeep(document).forEach(replaceVideoIfNeeded);
     } else {
-        for (const placeholder of document.querySelectorAll("video[data-censor-video-placeholder]")) {
+        for (const placeholder of findVideosDeep(document)) {
+            if (!placeholder.hasAttribute("data-censor-video-placeholder")) continue;
             const original = videoOriginals.get(placeholder);
             if (!original) continue;
             videoOriginals.delete(placeholder);
@@ -72,9 +74,9 @@ function applyCensorVideoSetting() {
             settings.removeVideos = false;
             applyVideoSetting();
         }
-        document.querySelectorAll("video").forEach(censorVideoIfNeeded);
+        findVideosDeep(document).forEach(handleVideo);
     } else {
-        document.querySelectorAll("video[data-censor-source]").forEach(v => {
+        findVideosDeep(document).filter(v => v.hasAttribute("data-censor-source")).forEach(v => {
             // Walk up to find the original video element tracked by the pipeline.
             // stopVideoCensorPipeline expects the *original* video, which the
             // pipeline stored in _activePipelines keyed by the original element.
@@ -88,6 +90,6 @@ function applyCensorVideoSetting() {
         });
 
         // Fallback: also attempt to stop any video that might be the original.
-        document.querySelectorAll("video").forEach(v => stopVideoCensorPipeline(v));
+        findVideosDeep(document).forEach(v => stopVideoCensorPipeline(v));
     }
 }

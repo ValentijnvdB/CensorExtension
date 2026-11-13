@@ -149,8 +149,26 @@ async function showConfigError() {
     if (err) $("configErrorText").textContent = err.error ?? err.code;
 }
 
+// ── Page notices (background.js) ──────────────────────────────────────────────
+
+async function showTabNotices() {
+    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+    if (!tab) return;
+    const notices = await browser.runtime.sendMessage({ type: "GET_TAB_NOTICES", tabId: tab.id }).catch(() => null);
+    const count = notices?.drmVideos ?? 0;
+    $("drmNotice").classList.toggle("hidden", count === 0);
+    if (!count) return;
+    $("drmNoticeTitle").textContent = count === 1
+        ? "DRM-protected video on this page"
+        : `${count} DRM-protected videos on this page`;
+    $("drmNoticeText").textContent = count === 1
+        ? "Its frames can't be read, so it can't be censored. It is shown unmodified."
+        : "Their frames can't be read, so they can't be censored. They are shown unmodified.";
+}
+
 refreshServerStatus();
-setInterval(refreshServerStatus, 5000);
+showTabNotices();
+setInterval(() => { refreshServerStatus(); showTabNotices(); }, 5000);
 showConfigError();
 browser.storage.onChanged.addListener((changes, area) => {
     if (area === "local" && changes[CONFIG_ERROR_KEY]) showConfigError();

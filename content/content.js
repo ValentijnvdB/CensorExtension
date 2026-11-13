@@ -5,7 +5,8 @@
  * message listener, and starts the DOM observer.
  *
  * Load order in manifest.json must be:
- *   state.js → dom-utils.js → filters.js → gifs.js → videos.js → pipeline.js → content.js
+ *   state.js → dom-utils.js → shadow_dom.js → filters.js → gifs.js → … → video_drm.js
+ *   → videos.js → pipeline.js → content.js
  */
 
 // ── Init ──────────────────────────────────────────────────────────────────────
@@ -46,7 +47,7 @@ Promise.all([
         preInitQueue = [];
         // Videos seen before now were skipped: the video behavior wasn't known yet.
         // (Handling a video twice is harmless.)
-        document.querySelectorAll("video").forEach(handleVideo);
+        findVideosDeep(document).forEach(handleVideo);
     }
 });
 
@@ -99,12 +100,20 @@ browser.runtime.onMessage.addListener((msg) => {
 function processAllImages() {
     if (settings.extensionEnabled) {
         document.querySelectorAll("img").forEach(enqueueImage);
-        document.querySelectorAll("video").forEach(handleVideo);
+        findVideosDeep(document).forEach(handleVideo);
     }
 }
 
 /** Applies the video behavior to a <video>. */
 function handleVideo(video) {
+    // A DRM-protected video can't be censored: it stays as it is (video_drm.js).
+    if (settings.censorVideos || settings.prerenderVideos) {
+        watchForDrm(video);
+        if (isDrmVideo(video)) {
+            leaveDrmVideoAlone(video);
+            return;
+        }
+    }
     replaceVideoIfNeeded(video);
     censorVideoIfNeeded(video);
     prerenderVideoIfNeeded(video);
@@ -121,7 +130,7 @@ const observer = new MutationObserver((mutations) => {
                     handleVideo(node);
                 } else {
                     node.querySelectorAll?.("img").forEach(enqueueImage);
-                    node.querySelectorAll?.("video").forEach(handleVideo);
+                    findVideosDeep(node).forEach(handleVideo);
                 }
             }
 
@@ -133,6 +142,19 @@ const observer = new MutationObserver((mutations) => {
         }
     }
 });
+
+// Videos inside shadow roots (shadow_dom.js): the observer above doesn't see
+// into them, so each shadow root gets one of its own. Only videos are handled there.
+const shadowObserver = new MutationObserver((mutations) => {
+    if (!settings.extensionEnabled) return;
+    for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+            if (node.nodeType === Node.ELEMENT_NODE) findVideosDeep(node).forEach(handleVideo);
+        }
+    }
+});
+
+onShadowRoot = (root) => shadowObserver.observe(root, { childList: true, subtree: true });
 
 function init() {
     observer.observe(document.documentElement, {

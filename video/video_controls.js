@@ -168,7 +168,8 @@ class VideoControls {
         const r = this._bar.getBoundingClientRect();
         const x = r.left + r.width / 2, y = r.top + r.height / 2;
         if (!r.width || x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) return false;
-        const top = document.elementFromPoint(x, y);
+        // In a shadow root, document.elementFromPoint() would only give its host.
+        const top = this._wrapper.getRootNode().elementFromPoint(x, y);
         return top !== null && !this._wrapper.contains(top);
     }
 

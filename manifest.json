@@ -11,6 +11,10 @@
     "<all_urls>"
   ],
 
+  "background": {
+    "scripts": ["background.js"]
+  },
+
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
@@ -22,6 +26,7 @@
         "content/settings_reader.js",
         "content/settings_cache.js",
         "content/dom-utils.js",
+        "content/shadow_dom.js",
         "content/filters.js",
         "content/gifs.js",
         "video/video_ws.js",
@@ -31,6 +36,7 @@
         "video/video_controls.js",
         "video/video_pipeline.js",
         "video/video_jobs.js",
+        "video/video_drm.js",
         "video/videos.js",
         "content/load-behavior.js",
         "content/pipeline.js",
